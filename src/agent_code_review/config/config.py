@@ -11,8 +11,8 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field
 
-
-DEFAULT_MODEL = "openai:gpt-5"
+load_dotenv()
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL")
 DEFAULT_OUTPUT_DIR = "ai-code-review-docs"
 
 
@@ -23,6 +23,7 @@ class ApiKeys(BaseModel):
     anthropic: str | None = None
     openrouter: str | None = None
     openai: str | None = None
+    deepseek: str | None = None
 
     def for_provider(self, provider: str) -> str | None:
         normalized = "google" if provider == "gemini" else provider
@@ -48,6 +49,7 @@ class ResolvedConfig(BaseModel):
     output_dir: Path
     output_format: str = "markdown"
     debug: bool = False
+    log_level: str = "info"
     skip_key_check: bool = False
     project_root: Path
 
@@ -69,6 +71,7 @@ class ResolvedConfig(BaseModel):
             "outputDir": str(self.output_dir),
             "outputFormat": self.output_format,
             "debug": self.debug,
+            "log_level": self.log_level,
             "skipKeyCheck": self.skip_key_check,
         }
 
@@ -95,6 +98,7 @@ def provider_display_name(provider: str) -> str:
         "anthropic": "Anthropic",
         "openai": "OpenAI",
         "openrouter": "OpenRouter",
+        "deepseek": "DeepSeek",
     }
     return names.get(provider.lower(), provider)
 
@@ -140,6 +144,7 @@ def _env_api_keys() -> dict[str, str | None]:
             os.getenv("AI_CODE_REVIEW_OPENROUTER_API_KEY") or os.getenv("OPENROUTER_API_KEY")
         ),
         "openai": os.getenv("AI_CODE_REVIEW_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY"),
+        "deepseek": os.getenv("DEEPSEEK_API_KEY"),
     }
 
 
@@ -150,6 +155,7 @@ def _project_api_keys(project_config: dict[str, Any]) -> dict[str, str | None]:
         "anthropic": keys.get("anthropic") or None,
         "openrouter": keys.get("openrouter") or None,
         "openai": keys.get("openai") or None,
+        "deepseek": keys.get("deepseek") or None,
     }
 
 
@@ -179,6 +185,7 @@ def resolve_config(
     cli_output_dir: str | None = None,
     cli_output_format: str | None = None,
     cli_api_keys: dict[str, str] | None = None,
+    cli_log_level: str | None = None,
     debug: bool | None = None,
     skip_key_check: bool | None = None,
 ) -> ResolvedConfig:
@@ -194,7 +201,7 @@ def resolve_config(
 
     merged_keys = {
         provider: cli_keys.get(provider) or project_keys.get(provider) or env_keys.get(provider)
-        for provider in ("google", "anthropic", "openrouter", "openai")
+        for provider in ("google", "anthropic", "openrouter", "openai", "deepseek")
     }
 
     project_skip = (project_config.get("preferences") or {}).get("skip_validation")
@@ -202,7 +209,6 @@ def resolve_config(
     selected_model = (
         cli_model
         or _project_model(project_config)
-        or os.getenv("AI_CODE_REVIEW_MODEL")
         or DEFAULT_MODEL
     )
 
@@ -219,10 +225,15 @@ def resolve_config(
         api_keys=ApiKeys(**merged_keys),
         output_dir=output_dir,
         output_format=cli_output_format
-        or os.getenv("AI_CODE_REVIEW_OUTPUT_FORMAT")
+        or os.getenv("OUTPUT_FORMAT")
         or (project_config.get("output") or {}).get("format")
         or "markdown",
         debug=debug if debug is not None else os.getenv("AI_CODE_REVIEW_DEBUG") == "true",
+        log_level=cli_log_level
+        or os.getenv("LOG_LEVEL")
+        or (project_config.get("behavior") or {}).get("log_level")
+        or (project_config.get("system") or {}).get("log_level")
+        or "info",
         skip_key_check=skip_key_check if skip_key_check is not None else bool(project_skip),
         project_root=root,
     )

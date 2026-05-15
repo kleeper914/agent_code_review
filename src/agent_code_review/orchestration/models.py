@@ -20,7 +20,9 @@ MODEL_REGISTRY = [
     ModelInfo("anthropic:claude-opus-4-7", "anthropic", "Claude Opus 4.7", 1_000_000),
     ModelInfo("openai:gpt-5.5", "openai", "GPT-5.5", 1_000_000),
     ModelInfo("openrouter:qwen/qwen-3.6-plus-preview", "openrouter", "OpenRouter (Qwen 3.6 Plus)", 1_000_000),
-    ModelInfo("openai:gpt-5", "openai", "GPT-5", 400_000)
+    ModelInfo("openai:gpt-5", "openai", "GPT-5", 400_000),
+    ModelInfo("deepseek:deepseek-v4-pro", "deepseek", "DeepSeek V4 Pro", 1_000_000),
+    ModelInfo("deepseek:deepseek-v4-flash", "deepseek", "DeepSeek V4 Flash", 1_000_000),
 ]
 
 def list_supported_models() -> list[ModelInfo]:
@@ -66,6 +68,15 @@ def create_chat_model(config: ResolvedConfig) -> Any:
             model=model_name,
             api_key=api_key,
             base_url=os.getenv("LLM_BASE_URL"),
+        )
+    
+    if provider == "deepseek":
+        from langchain_deepseek import ChatDeepSeek
+
+        return ChatDeepSeek(
+            model=model_name,
+            api_key=api_key,
+            api_base=os.getenv("LLM_BASE_URL")
         )
     
     raise ValueError(f"Unsupported provider: {provider}")

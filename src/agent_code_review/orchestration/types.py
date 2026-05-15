@@ -24,6 +24,9 @@ class ReviewOptions(BaseModel):
     include_tests: bool = False
     include_project_docs: bool = True
     debug: bool = False
+    verbose: bool = False
+    quiet: bool = False
+    log_level: str | None = None
     skip_key_check: bool = False
     api_keys: dict[str, str] = Field(default_factory=dict)
 
