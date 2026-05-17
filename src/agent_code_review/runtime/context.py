@@ -98,6 +98,12 @@ class RuntimeContext:
             duration_ms=duration_ms
         )
     
+    def stream_model_chunk(self, text: str) -> None:
+        self.display.stream_chunk(text)
+
+    def finish_model_stream(self) -> None:
+        self.display.finish_stream()
+    
     @contextmanager
     def wrap_phase(
         self,

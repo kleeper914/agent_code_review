@@ -12,16 +12,15 @@ from ..config import (
     ResolvedConfig,
     parse_model,
     provider_display_name,
-    require_api_key,
     resolve_config,
 )
+from ..llm_clients import create_llm_client, list_supported_models
 from ..orchestration import run_review
-from ..orchestration.models import list_supported_models
 from ..orchestration.types import ReviewOptions
 from ..runtime import RunLevel, RunPhase, create_runtime
 
 
-app = typer.Typer(add_completion=False, help="AI Code Review Python MVP")
+app = typer.Typer(add_completion=False, help="Agent Code Review")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -95,15 +94,12 @@ def _run_review_or_models(argv: list[str]) -> int:
 
 
 def test_model_connection(config: ResolvedConfig) -> str:
-    require_api_key(config)
-    from ..orchestration import models
+    client = create_llm_client(config)
 
-    chat_model = models.create_chat_model(config)
-    response = chat_model.invoke(
+    response = client.generate_review(
         "Reply with a short sentence confirming this model is available for code review."
     )
-    content = getattr(response, "content", response)
-    return f"✓ {config.selected_model}: {content}"
+    return f"✓ {config.selected_model}: {response.content}"
 
 
 def _review_parser() -> argparse.ArgumentParser:
@@ -187,7 +183,7 @@ def _run_test_model(argv: list[str]) -> int:
 
     try:
         message = test_model_connection(config)
-    except ValueError as exc:
+    except Exception as exc:
         runtime.emit(
             RunPhase.TEST_MODEL,
             str(exc),

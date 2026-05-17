@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from typing import TextIO
+
 from .events import RunEvent, RunLevel
 
 
@@ -35,6 +36,7 @@ class RuntimeDisplay:
         self.quiet = quiet
         self.debug = debug
         self.log_level = log_level
+        self._stream_active = False
 
     def handle(self, event: RunEvent) -> None:
         level = RunLevel(event.level)
@@ -49,6 +51,20 @@ class RuntimeDisplay:
         if line:
             self.stream.write(f"{line}\n")
             self.stream.flush()
+    
+    def stream_chunk(self, text: str) -> None:
+        if not text or self.quiet or self.log_level == "none":
+            return
+        self.stream.write(text)
+        self.stream.flush()
+        self._stream_active = True
+    
+    def finish_stream(self) -> None:
+        if not self._stream_active:
+            return
+        self.stream.write("\n")
+        self.stream.flush()
+        self._stream_active = False
 
     def _format_event(self, event: RunEvent) -> str:
         level = RunLevel(event.level)

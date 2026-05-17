@@ -6,8 +6,8 @@ from typing import Any, TypedDict
 from ..config import ResolvedConfig, resolve_config
 from ..discovery import ProjectContext, discover_project_context
 from ..runtime import RunLevel, RunPhase, RuntimeContext, create_runtime
+from ..llm_clients import LLMResponse, create_llm_client, GenerationOptions
 
-from . import models
 from .prompts import build_review_prompt
 from .reports import save_review_result
 from .types import ReviewOptions, ReviewResult
@@ -19,7 +19,7 @@ class ReviewState(TypedDict, total=False):
     runtime: RuntimeContext
     context: ProjectContext
     prompt: str
-    response: str
+    response: LLMResponse
     result: ReviewResult
 
 
@@ -145,8 +145,16 @@ def _invoke_model(state: ReviewState) -> ReviewState:
     runtime = state["runtime"]
     config = state["config"]
     try:
-        chat_model = models.create_chat_model(state["config"])
-        message = chat_model.invoke(state["prompt"])
+        client = create_llm_client(config)
+        try:
+            response = client.generate_review(
+                state["prompt"],
+                GenerationOptions(
+                    on_chunk=runtime.stream_model_chunk,
+                )
+            )
+        finally:
+            runtime.finish_model_stream()
     except Exception as exc:
         duration_ms = (datetime.now(timezone.utc) - started).total_seconds() * 1000
         runtime.emit(
@@ -161,32 +169,36 @@ def _invoke_model(state: ReviewState) -> ReviewState:
             duration_ms=duration_ms
         )
         raise
-    content = getattr(message, "content", message)
-    if isinstance(content, list):
-        content = "\n".join(str(item) for item in content)
     duration_ms = (datetime.now(timezone.utc) - started).total_seconds() * 1000
     runtime.emit(
         RunPhase.MODEL,
         "Model invoked.",
-        metadata={"model": config.selected_model, "provider": config.provider},
+        metadata={
+            "model": response.model,
+            "provider": config.provider,
+            "usage": response.usage.model_dump(exclude_none=True),
+        },
         duration_ms=duration_ms
     )
-    return {**state, "response": str(content)}
+    return {**state, "response": response}
 
 def _build_result(state: ReviewState) -> ReviewState:
     options = state["options"]
     config = state["config"]
     context = state["context"]
+    response = state["response"]
     result = ReviewResult(
-        content=state["response"],
+        content=response.content,
         file_path=options.target,
         review_type=options.review_type,
         timestamp=datetime.now(timezone.utc).isoformat(),
-        model_used=config.selected_model,
+        model_used=response.model,
         files=context.files,
         metadata={
             "projectName": context.project_name,
             "provider": config.provider,
+            "model": response.model,
+            "usage": response.usage.model_dump(exclude_none=True),
             "fileCount": len(context.files),
             "docCount": len(context.docs),
         },
