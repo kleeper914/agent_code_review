@@ -4,5 +4,5 @@ from .types import ReviewOptions, ReviewResult
 __all__ = [
     "ReviewOptions",
     "ReviewResult",
-    "run_view"
+    "run_review"
 ]
