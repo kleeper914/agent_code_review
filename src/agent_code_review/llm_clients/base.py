@@ -158,6 +158,9 @@ class BaseLangChainAdapter:
         prompt: str,
         options: GenerationOptions | None = None,
     ) -> LLMResponse:
+        if options and options.tools and callable(getattr(self._chat_model, "bind_tools", None)):
+            return self._generate_with_tools(prompt, options)
+
         parts: list[str] = []
         raw_chunks: list[Any] = []
         usage = TokenUsage()
@@ -239,6 +242,33 @@ class BaseLangChainAdapter:
             raw=raw,
             model=self.model,
         )
+    
+    def _generate_with_tools(self, prompt: str, options: GenerationOptions) -> LLMResponse:
+        """
+        Run one provider-native tool-calling turn through LangChain when available.
+        """
+        try:
+            from langchain_core.messages import HumanMessage, ToolMessage
+        except Exception:
+            return self._to_response(self._chat_model.invoke(prompt))
+        
+        bound_model = self._chat_model.bind_tools(options.tools)
+        initial = bound_model.invoke(prompt)
+        tool_calls = getattr(initial, "tool_calls", None) or []
+        if not tool_calls:
+            return self._to_response(initial)
+        
+        messages: list[Any] = [HumanMessage(content=prompt), initial]
+        for index, call in enumerate(tool_calls):
+            try:
+                result = options.tool_executor(call) if options.tool_executor else "No tool executor configured."
+            except Exception as exc:
+                result = f"Tool executor failed: {exc}"
+            tool_call_id = _tool_call_id(call, index)
+            messages.append(ToolMessage(content=str(result), tool_call_id=tool_call_id))
+        
+        final = self._chat_model.invoke(messages)
+        return self._to_response(final)
 
     def _stream_raw_chunks(self, prompt: str) -> Iterator[tuple[Any, str]]:
         """
@@ -338,3 +368,9 @@ def _has_usage(usage: TokenUsage) -> bool:
 def _emit_chunk(options: GenerationOptions | None, text: str) -> None:
     if options and options.on_chunk:
         options.on_chunk(text)
+
+
+def _tool_call_id(call: Any, index: int) -> str:
+    if isinstance(call, dict):
+        return str(call.get("id") or f"tool_call_{index}")
+    return str(getattr(call, "id", "") or f"tool_call_{index}")

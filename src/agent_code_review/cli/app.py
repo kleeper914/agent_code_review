@@ -54,6 +54,12 @@ def _run_review_or_models(argv: list[str]) -> int:
         include_tests=namespace.include_tests,
         include_project_docs=not namespace.no_project_docs,
         include_dependency_analysis=namespace.include_dependency_analysis,
+        estimate=namespace.estimate,
+        multi_pass=namespace.multi_pass,
+        force_single_pass=namespace.force_single_pass,
+        context_maintenance_factor=namespace.context_maintenance_factor,
+        batch_token_limit=namespace.batch_token_limit,
+        enable_semantic_chunking=namespace.enable_semantic_chunking,
         diagram=namespace.diagram,
         use_ts_prune=namespace.use_ts_prune,
         use_eslint=namespace.use_eslint,
@@ -99,6 +105,7 @@ def _run_review_or_models(argv: list[str]) -> int:
         ],
         ai_detection_include_in_report=namespace.ai_detection_include_in_report,
         ai_detection_fail_on_detection=namespace.ai_detection_fail_on_detection,
+        use_memory=namespace.use_memory,
         debug=namespace.debug,
         verbose=namespace.verbose,
         quiet=namespace.quiet,
@@ -135,6 +142,46 @@ def _run_review_or_models(argv: list[str]) -> int:
     return 0
 
 
+def _run_test_model(argv: list[str]) -> int:
+    parser = _test_model_parser()
+    namespace = parser.parse_args(argv)
+    selected_model = namespace.model or namespace.model_arg
+    cli_api_keys = _api_keys_from_namespace(namespace)
+    config = resolve_config(
+        cli_model=selected_model,
+        cli_api_keys=cli_api_keys,
+        cli_log_level=namespace.log_level,
+        debug=namespace.debug,
+    )
+    options = ReviewOptions(
+        model=selected_model,
+        debug=namespace.debug,
+        verbose=namespace.verbose,
+        quiet=namespace.quiet,
+        log_level=namespace.log_level,
+    )
+    runtime = create_runtime(config, options)
+    runtime.emit(
+        RunPhase.TEST_MODEL,
+        "Testing model",
+        metadata={"model": config.selected_model, "provider": config.provider},
+    )
+
+    try:
+        message = test_model_connection(config)
+    except Exception as exc:
+        runtime.emit(
+            RunPhase.TEST_MODEL,
+            str(exc),
+            level=RunLevel.ERROR,
+            metadata={"model": config.selected_model, "provider": config.provider},
+        )
+        return 1
+
+    print(message)
+    return 0
+
+
 def test_model_connection(config: ResolvedConfig) -> str:
     client = create_llm_client(config)
     response = client.generate_review(
@@ -166,6 +213,17 @@ def _review_parser() -> argparse.ArgumentParser:
     parser.add_argument("--include-tests", action="store_true")
     parser.add_argument("--no-project-docs", action="store_true")
     parser.add_argument("--include-dependency-analysis", action="store_true")
+    parser.add_argument("--estimate", action="store_true")
+    parser.add_argument("--multi-pass", action="store_true")
+    parser.add_argument("--force-single-pass", action="store_true")
+    parser.add_argument("--context-maintenance-factor", type=float, default=0.15)
+    parser.add_argument("--batch-token-limit", type=int)
+    parser.add_argument(
+        "--enable-semantic-chunking",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument("--use-memory", action="store_true")
     parser.add_argument("--diagram", action="store_true")
     parser.add_argument("--use-ts-prune", action="store_true")
     parser.add_argument("--use-eslint", action="store_true")
@@ -239,6 +297,18 @@ def _review_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _test_model_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="aicode-review test-model")
+    parser.add_argument("model_arg", nargs="?")
+    parser.add_argument("--model", "-m")
+    parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--log-level", choices=["debug", "info", "warning", "error", "none"])
+    _add_api_key_options(parser)
+    return parser
+
+
 def _add_api_key_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--google-api-key")
     parser.add_argument("--anthropic-api-key")
@@ -272,57 +342,3 @@ def _print_models() -> None:
             f"- {model.key} | {provider_display_name(provider)} | "
             f"{model.display_name} | {model.context_window:,} context"
         )
-
-
-# ========= test ==============
-
-def _test_model_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="aicode-review test-model")
-    parser.add_argument("model_arg", nargs="?")
-    parser.add_argument("--model", "-m")
-    parser.add_argument("--debug", action="store_true")
-    parser.add_argument("--verbose", action="store_true")
-    parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--log-level", choices=["debug", "info", "warning", "error", "none"])
-    _add_api_key_options(parser)
-    return parser
-
-
-def _run_test_model(argv: list[str]) -> int:
-    parser = _test_model_parser()
-    namespace = parser.parse_args(argv)
-    selected_model = namespace.model or namespace.model_arg
-    cli_api_keys = _api_keys_from_namespace(namespace)
-    config = resolve_config(
-        cli_model=selected_model,
-        cli_api_keys=cli_api_keys,
-        cli_log_level=namespace.log_level,
-        debug=namespace.debug,
-    )
-    options = ReviewOptions(
-        model=selected_model,
-        debug=namespace.debug,
-        verbose=namespace.verbose,
-        quiet=namespace.quiet,
-        log_level=namespace.log_level,
-    )
-    runtime = create_runtime(config, options)
-    runtime.emit(
-        RunPhase.TEST_MODEL,
-        "Testing model",
-        metadata={"model": config.selected_model, "provider": config.provider},
-    )
-
-    try:
-        message = test_model_connection(config)
-    except Exception as exc:
-        runtime.emit(
-            RunPhase.TEST_MODEL,
-            str(exc),
-            level=RunLevel.ERROR,
-            metadata={"model": config.selected_model, "provider": config.provider},
-        )
-        return 1
-
-    print(message)
-    return 0

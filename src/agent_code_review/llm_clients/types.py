@@ -22,6 +22,8 @@ class GenerationOptions(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None
     on_chunk: Callable[[str], None] | None = None
+    tools: list[Any] = Field(default_factory=list)
+    tool_executor: Callable[[Any], str] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

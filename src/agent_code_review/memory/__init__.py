@@ -1,7 +1,3 @@
-from .base import MemoryEntry, MemoryStore, NullMemoryStore
+from .base import FileMemoryStore, MemoryEntry, MemoryStore, NullMemoryStore
 
-__all__ = [
-    "MemoryEntry",
-    "MemoryStore",
-    "NullMemoryStore"
-]
+__all__ = ["FileMemoryStore", "MemoryEntry", "MemoryStore", "NullMemoryStore"]

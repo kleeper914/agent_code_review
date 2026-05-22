@@ -37,6 +37,12 @@ class ReviewOptions(BaseModel):
     include_tests: bool = False         # 是否将测试文件纳入上下文
     include_project_docs: bool = True   # 是否包含项目文档
     include_dependency_analysis: bool | None = None     # 是否进行依赖分析 True-强制开启 False-强制关闭 None-自动决定
+    estimate: bool = False
+    multi_pass: bool = False
+    force_single_pass: bool = False
+    context_maintenance_factor: float = 0.15
+    batch_token_limit: int | None = None
+    enable_semantic_chunking: bool = True
     diagram: bool = False           # 是否生成架构图或依赖图
     use_ts_prune: bool = False      # 是否使用ts-prune检查TypeScript项目的未使用导出，对TS项目的优化
     use_eslint: bool = False        # 是否使用ESLint做代码质量检查，对JS/TS项目优化
@@ -109,3 +115,17 @@ class ReviewResult(BaseModel):
     files: list[DiscoveredFile] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     output_path: Path | None = None
+
+
+class PassResult(BaseModel):
+    """
+    One completed multi-pass review invocation.
+    """
+
+    pass_number: int
+    files: list[str] = Field(default_factory=list)
+    estimated_token_count: int = 0
+    content: str = ""
+    success: bool = True
+    error: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)

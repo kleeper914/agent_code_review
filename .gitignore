@@ -12,6 +12,7 @@ wheels/
 
 # codex generations
 codex/*
+*.png
 
 # environment variables
 .env
