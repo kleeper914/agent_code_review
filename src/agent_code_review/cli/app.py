@@ -15,7 +15,7 @@ from ..config import (
     resolve_config,
 )
 from ..llm_clients import create_llm_client, list_supported_models
-from ..orchestration import run_review
+from ..orchestration import ReviewService
 from ..orchestration.types import ReviewOptions
 from ..runtime import RunLevel, RunPhase, create_runtime
 
@@ -26,6 +26,8 @@ app = typer.Typer(add_completion=False, help="AI Code Review Python MVP")
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     try:
+        if args and args[0] == "mcp":
+            return _run_mcp(args[1:])
         if args and args[0] == "test-model":
             return _run_test_model(args[1:])
         return _run_review_or_models(args)
@@ -134,12 +136,35 @@ def _run_review_or_models(argv: list[str]) -> int:
         },
     )
     try:
-        run_review(options, config, runtime)
+        ReviewService().run_review(options, config, runtime)
     except Exception as exc:
         if not any(RunLevel(event.level) is RunLevel.ERROR for event in runtime.events):
             runtime.emit(RunPhase.MODEL, str(exc), level=RunLevel.ERROR)
         return 1
     return 0
+
+
+def _run_mcp(argv: list[str]) -> int:
+    parser = _mcp_parser()
+    namespace = parser.parse_args(argv)
+    return run_mcp_server(
+        name=namespace.name,
+        debug=namespace.debug,
+        max_requests=namespace.max_requests,
+        timeout=namespace.timeout,
+    )
+
+
+def run_mcp_server(
+    *,
+    name: str = "ai-code-review",
+    debug: bool = False,
+    max_requests: int = 5,
+    timeout: int = 300000,
+) -> int:
+    from ..mcp_server.server import run_mcp_server as start_server
+
+    return start_server(name=name, debug=debug, max_requests=max_requests, timeout=timeout)
 
 
 def _run_test_model(argv: list[str]) -> int:
@@ -306,6 +331,15 @@ def _test_model_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--log-level", choices=["debug", "info", "warning", "error", "none"])
     _add_api_key_options(parser)
+    return parser
+
+
+def _mcp_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="aicode-review mcp")
+    parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--name", default="ai-code-review")
+    parser.add_argument("--max-requests", type=int, default=5)
+    parser.add_argument("--timeout", type=int, default=300000)
     return parser
 
 

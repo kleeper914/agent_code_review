@@ -33,6 +33,8 @@ class ReviewOptions(BaseModel):
     output: OutputFormat = "markdown"
     model: str | None = None
     output_dir: str | None = None
+    language: str | None = None
+    framework: str | None = None
     # 项目上下文控制字段
     include_tests: bool = False         # 是否将测试文件纳入上下文
     include_project_docs: bool = True   # 是否包含项目文档
