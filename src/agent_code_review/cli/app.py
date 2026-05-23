@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 import typer
 
@@ -17,6 +20,7 @@ from ..config import (
 from ..llm_clients import create_llm_client, list_supported_models
 from ..orchestration import ReviewService
 from ..orchestration.types import ReviewOptions
+from ..observability import configure_observability
 from ..runtime import RunLevel, RunPhase, create_runtime
 
 
@@ -28,6 +32,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args and args[0] == "mcp":
             return _run_mcp(args[1:])
+        if args and args[0] == "plugins":
+            return _run_plugins(args[1:])
+        if args and args[0] == "prompt-feedback":
+            return _run_prompt_feedback(args[1:])
         if args and args[0] == "test-model":
             return _run_test_model(args[1:])
         return _run_review_or_models(args)
@@ -67,6 +75,9 @@ def _run_review_or_models(argv: list[str]) -> int:
         use_eslint=namespace.use_eslint,
         trace_code=namespace.trace_code,
         focused=namespace.focused,
+        strategy=namespace.strategy,
+        plugins_dir=namespace.plugins_dir,
+        coding_test_config=namespace.coding_test_config,
         assignment_file=namespace.assignment_file,
         assignment_url=namespace.assignment_url,
         assignment_text=namespace.assignment_text,
@@ -114,6 +125,18 @@ def _run_review_or_models(argv: list[str]) -> int:
         log_level=namespace.log_level,
         skip_key_check=namespace.skip_key_check,
         api_keys=cli_api_keys,
+        otel_enabled=namespace.otel_enabled or _env_flag("AI_CODE_REVIEW_OTEL_ENABLED"),
+        otel_endpoint=namespace.otel_endpoint or os.getenv("AI_CODE_REVIEW_OTEL_ENDPOINT"),
+        otel_service_name=namespace.otel_service_name
+        or os.getenv("AI_CODE_REVIEW_OTEL_SERVICE_NAME")
+        or "aicode-review-python",
+        otel_console=namespace.otel_console or _env_flag("AI_CODE_REVIEW_OTEL_CONSOLE"),
+    )
+    configure_observability(
+        enabled=options.otel_enabled,
+        endpoint=options.otel_endpoint,
+        service_name=options.otel_service_name,
+        console=options.otel_console,
     )
     config = resolve_config(
         cli_model=options.model,
@@ -153,6 +176,74 @@ def _run_mcp(argv: list[str]) -> int:
         max_requests=namespace.max_requests,
         timeout=namespace.timeout,
     )
+
+
+def _run_plugins(argv: list[str]) -> int:
+    parser = _plugins_parser()
+    namespace = parser.parse_args(argv)
+    if namespace.plugins_command != "list":
+        parser.error("plugins requires a subcommand")
+    from ..plugins import create_default_registry, load_plugins_from_directory, plugin_to_row
+
+    registry = create_default_registry()
+    load_plugins_from_directory(namespace.plugins_dir, registry)
+    rows = [plugin_to_row(plugin) for plugin in registry.list_plugins()]
+    for row in rows:
+        print(f"{row['name']}\t{row['source']}\t{row['description']}")
+    return 0
+
+
+def _run_prompt_feedback(argv: list[str]) -> int:
+    parser = _prompt_feedback_parser()
+    namespace = parser.parse_args(argv)
+    from ..prompts.feedback import PromptFeedback, PromptFeedbackStore, PromptOptimizer
+
+    store = PromptFeedbackStore.for_project(Path.cwd())
+    command = namespace.feedback_command
+    if command == "add":
+        store.add(
+            PromptFeedback(
+                review_type=namespace.review_type,
+                prompt=namespace.prompt,
+                rating=namespace.rating,
+                comments=namespace.comments,
+                positive_aspects=_split_csv(namespace.positive_aspects),
+                negative_aspects=_split_csv(namespace.negative_aspects),
+            )
+        )
+        print(f"Stored feedback for {namespace.review_type}")
+        return 0
+    if command == "list":
+        for entry in store.list(namespace.review_type):
+            print(f"{entry.rating}/5\t{entry.review_type}\t{entry.prompt}")
+        return 0
+    if command == "best":
+        entry = store.best(namespace.review_type)
+        if entry is None:
+            print(f"No feedback found for {namespace.review_type}")
+            return 1
+        if namespace.as_json:
+            print(json.dumps(entry.model_dump(mode="json"), ensure_ascii=False))
+        else:
+            print(f"{entry.rating}/5\t{entry.review_type}\t{entry.prompt}")
+        return 0
+    if command == "optimize":
+        config = resolve_config(
+            cli_model=namespace.model,
+            cli_api_keys=_api_keys_from_namespace(namespace),
+            debug=namespace.debug,
+            cli_log_level=namespace.log_level,
+        )
+        optimized = PromptOptimizer(store).optimize(
+            review_type=namespace.review_type,
+            original_prompt=namespace.prompt,
+            review_result=namespace.review_result,
+            config=config,
+        )
+        print(optimized)
+        return 0
+    parser.error("prompt-feedback requires a subcommand")
+    return 2
 
 
 def run_mcp_server(
@@ -254,6 +345,9 @@ def _review_parser() -> argparse.ArgumentParser:
     parser.add_argument("--use-eslint", action="store_true")
     parser.add_argument("--trace-code", action="store_true")
     parser.add_argument("--focused", action="store_true")
+    parser.add_argument("--strategy")
+    parser.add_argument("--plugins-dir")
+    parser.add_argument("--coding-test-config")
     parser.add_argument("--assignment-file")
     parser.add_argument("--assignment-url")
     parser.add_argument("--assignment-text")
@@ -316,6 +410,10 @@ def _review_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--log-level", choices=["debug", "info", "warning", "error", "none"])
     parser.add_argument("--skip-key-check", action="store_true")
+    parser.add_argument("--otel-enabled", action="store_true")
+    parser.add_argument("--otel-endpoint")
+    parser.add_argument("--otel-service-name")
+    parser.add_argument("--otel-console", action="store_true")
     parser.add_argument("--models", action="store_true")
     parser.add_argument("--listmodels", action="store_true")
     _add_api_key_options(parser)
@@ -343,6 +441,45 @@ def _mcp_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _plugins_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="aicode-review plugins")
+    subparsers = parser.add_subparsers(dest="plugins_command")
+    list_parser = subparsers.add_parser("list")
+    list_parser.add_argument("--plugins-dir")
+    return parser
+
+
+def _prompt_feedback_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="aicode-review prompt-feedback")
+    subparsers = parser.add_subparsers(dest="feedback_command")
+
+    add_parser = subparsers.add_parser("add")
+    add_parser.add_argument("--type", dest="review_type", required=True)
+    add_parser.add_argument("--prompt", required=True)
+    add_parser.add_argument("--rating", type=int, required=True)
+    add_parser.add_argument("--comments")
+    add_parser.add_argument("--positive-aspects")
+    add_parser.add_argument("--negative-aspects")
+
+    list_parser = subparsers.add_parser("list")
+    list_parser.add_argument("--type", dest="review_type")
+
+    best_parser = subparsers.add_parser("best")
+    best_parser.add_argument("--type", dest="review_type", required=True)
+    best_parser.add_argument("--json", action="store_true", dest="as_json")
+
+    optimize_parser = subparsers.add_parser("optimize")
+    optimize_parser.add_argument("--type", dest="review_type", required=True)
+    optimize_parser.add_argument("--prompt", required=True)
+    optimize_parser.add_argument("--review-result", required=True)
+    optimize_parser.add_argument("--model")
+    optimize_parser.add_argument("--debug", action="store_true")
+    optimize_parser.add_argument("--log-level", choices=["debug", "info", "warning", "error", "none"])
+    _add_api_key_options(optimize_parser)
+
+    return parser
+
+
 def _add_api_key_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--google-api-key")
     parser.add_argument("--anthropic-api-key")
@@ -366,6 +503,10 @@ def _split_csv(value: str | None) -> list[str]:
     if not value:
         return []
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").lower() in {"1", "true", "yes", "on"}
 
 
 def _print_models() -> None:

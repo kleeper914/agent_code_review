@@ -13,6 +13,7 @@ from ..config import ResolvedConfig, resolve_config
 from ..discovery import DiscoveredFile, ProjectContext, discover_project_context
 from ..llm_clients import GenerationOptions, LLMResponse, create_llm_client
 from ..memory import FileMemoryStore, MemoryEntry
+from ..observability import get_observability
 from ..prompts import PromptPackage, build_prompt_package
 from ..runtime import RunLevel, RunPhase, RuntimeContext, create_runtime
 from ..strategies import EnhancedReviewContext, ReviewIntent, ReviewStrategy, get_strategy
@@ -73,7 +74,11 @@ def run_review(
     final_state = _run_langgraph_workflow(state)
     result = final_state["result"]
     started = datetime.now(timezone.utc)
-    output_path = save_review_result(result, resolved_config.output_dir, options.output)
+    with get_observability().start_span(
+        "orchestration.save_report",
+        {"format": options.output, "review_type": options.review_type},
+    ):
+        output_path = save_review_result(result, resolved_config.output_dir, options.output)
     duration_ms = (datetime.now(timezone.utc) - started).total_seconds() * 1000
     result.output_path = output_path
     result.metadata["outputPath"] = str(output_path)
@@ -128,13 +133,7 @@ def _run_langgraph_workflow(state: ReviewState) -> ReviewState:
         workflow.add_edge("result", END)
         workflow.add_edge("estimate_result", END)
         workflow.add_edge("multi_pass", END)
-
-        from pathlib import Path
-        graph = workflow.compile()
-        png_data = graph.get_graph().draw_mermaid_png()
-        Path("workflow.png").write_bytes(png_data)
-
-        return graph.invoke(state)
+        return workflow.compile().invoke(state)
     except Exception as exc:
         if exc.__class__.__name__ not in {"ImportError", "ModuleNotFoundError"}:
             raise
@@ -271,7 +270,7 @@ def _route_after_analysis(state: ReviewState) -> str:
 
 def _select_strategy(state: ReviewState) -> ReviewState:
     options = state["options"]
-    strategy = get_strategy(options.review_type)
+    strategy = get_strategy(options.review_type, options=options)
     intent = strategy.describe_intent(options)
     return {**state, "strategy": strategy, "intent": intent}
 
@@ -326,24 +325,28 @@ def _invoke_model(state: ReviewState) -> ReviewState:
     runtime = state["runtime"]
     config = state["config"]
     try:
-        client = create_llm_client(config)
-        dependency_context = state.get("dependency_tool_context")
-        try:
-            response = client.generate_review(
-                state["prompt"],
-                GenerationOptions(
-                    on_chunk=runtime.stream_model_chunk,
-                    metadata=state["prompt_package"].metadata,
-                    tools=dependency_context.tool_schemas
-                    if dependency_context and dependency_context.enabled
-                    else [],
-                    tool_executor=_execute_langchain_tool_call
-                    if dependency_context and dependency_context.enabled
-                    else None,
-                ),
-            )
-        finally:
-            runtime.finish_model_stream()
+        with get_observability().start_span(
+            "orchestration.invoke_model",
+            {"model": config.selected_model, "provider": config.provider},
+        ):
+            client = create_llm_client(config)
+            dependency_context = state.get("dependency_tool_context")
+            try:
+                response = client.generate_review(
+                    state["prompt"],
+                    GenerationOptions(
+                        on_chunk=runtime.stream_model_chunk,
+                        metadata=state["prompt_package"].metadata,
+                        tools=dependency_context.tool_schemas
+                        if dependency_context and dependency_context.enabled
+                        else [],
+                        tool_executor=_execute_langchain_tool_call
+                        if dependency_context and dependency_context.enabled
+                        else None,
+                    ),
+                )
+            finally:
+                runtime.finish_model_stream()
     except Exception as exc:
         duration_ms = (datetime.now(timezone.utc) - started).total_seconds() * 1000
         runtime.emit(

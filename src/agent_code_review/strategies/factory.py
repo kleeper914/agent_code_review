@@ -1,6 +1,9 @@
+"""Factory for phase 3 provider-neutral review strategies."""
+
 from __future__ import annotations
 
-from ..orchestration.types import ReviewType
+from ..orchestration.types import ReviewOptions, ReviewType
+from ..plugins import create_default_registry, load_plugins_from_directory
 
 from .architectural import ArchitecturalReviewStrategy
 from .base import ReviewStrategy
@@ -11,7 +14,12 @@ from .security import SecurityReviewStrategy
 from .unused_code import UnusedCodeReviewStrategy
 
 
-def get_strategy(review_type: str) -> ReviewStrategy:
+def get_strategy(review_type: str, options: ReviewOptions | None = None) -> ReviewStrategy:
+    if options and options.strategy:
+        registry = create_default_registry()
+        load_plugins_from_directory(options.plugins_dir, registry)
+        return registry.get_strategy(options.strategy)
+
     strategies = _strategy_map()
     try:
         return strategies[review_type]

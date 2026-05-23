@@ -11,8 +11,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from aicode_review.config import ResolvedConfig
-from aicode_review.runtime import RuntimeContext
+from ..config import ResolvedConfig
+from ..runtime import RuntimeContext
 
 from .orchestrator import run_review as run_orchestrated_review
 from .types import ReviewOptions, ReviewResult

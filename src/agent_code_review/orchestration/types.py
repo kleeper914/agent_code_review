@@ -50,6 +50,9 @@ class ReviewOptions(BaseModel):
     use_eslint: bool = False        # 是否使用ESLint做代码质量检查，对JS/TS项目优化
     trace_code: bool = False        # 是否进行代码追踪分析
     focused: bool = False           # 是否开启聚焦审查模式
+    strategy: str | None = None
+    plugins_dir: str | None = None
+    coding_test_config: str | None = None
     # homework/面试题/编程测试相关字段 - 主要用于"coding-test"场景
     assignment_file: str | None = None      # 编程任务说明文件路径
     assignment_url: str | None = None       # 编程任务说明的在线url
@@ -102,6 +105,10 @@ class ReviewOptions(BaseModel):
     log_level: str | None = None            # 日志级别
     skip_key_check: bool = False            # 是否跳过API Key检查
     api_keys: dict[str, str] = Field(default_factory=dict)  # API Key字典
+    otel_enabled: bool = False
+    otel_endpoint: str | None = None
+    otel_service_name: str = "agent-code-review"
+    otel_console: bool = False
 
 
 class ReviewResult(BaseModel):
