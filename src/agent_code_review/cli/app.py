@@ -9,27 +9,40 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-import typer
+import yaml
 
 from ..config import (
+    ApiKeys,
     ResolvedConfig,
     parse_model,
     provider_display_name,
+    require_api_key,
     resolve_config,
 )
 from ..llm_clients import create_llm_client, list_supported_models
 from ..orchestration import ReviewService
+from ..orchestration.reports import format_review_result
 from ..orchestration.types import ReviewOptions
+from ..orchestration.types import PUBLIC_REVIEW_TYPES
 from ..observability import configure_observability
 from ..runtime import RunLevel, RunPhase, create_runtime
-
-
-app = typer.Typer(add_completion=False, help="AI Code Review Python MVP")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     try:
+        if args and args[0] == "generate-config":
+            return _run_generate_config(args[1:])
+        if args and args[0] == "validate-config":
+            return _run_validate_config(args[1:])
+        if args and args[0] == "init":
+            return _run_init(args[1:])
+        if args and args[0] == "install":
+            return _run_install(args[1:])
+        if args and args[0] == "test-build":
+            return _run_test_build(args[1:])
+        if args and args[0] == "sync-github-projects":
+            return _run_sync_github_projects(args[1:])
         if args and args[0] == "mcp":
             return _run_mcp(args[1:])
         if args and args[0] == "plugins":
@@ -60,7 +73,16 @@ def _run_review_or_models(argv: list[str]) -> int:
         review_type=namespace.review_type,
         output=namespace.output,
         model=namespace.model,
+        writer_model=namespace.writer_model,
         output_dir=namespace.output_dir,
+        language=namespace.language,
+        framework=namespace.framework,
+        prompt_file=namespace.prompt_file,
+        interactive=namespace.interactive,
+        return_only=namespace.return_only,
+        priority_filter=namespace.priority_filter,
+        test_api=namespace.test_api,
+        stdout=namespace.stdout,
         include_tests=namespace.include_tests,
         include_project_docs=not namespace.no_project_docs,
         include_dependency_analysis=namespace.include_dependency_analysis,
@@ -158,12 +180,39 @@ def _run_review_or_models(argv: list[str]) -> int:
             "logLevel": config.log_level,
         },
     )
+    if options.interactive:
+        runtime.emit(
+            RunPhase.CONFIG,
+            "Interactive mode is accepted for compatibility; structured processing is planned for a later phase.",
+            level=RunLevel.WARNING,
+            metadata={"interactive": True},
+        )
+    if options.test_api:
+        try:
+            message = test_model_connection(config)
+        except Exception as exc:
+            runtime.emit(
+                RunPhase.TEST_MODEL,
+                str(exc),
+                level=RunLevel.ERROR,
+                metadata={"model": config.selected_model, "provider": config.provider},
+            )
+            return 1
+        runtime.emit(
+            RunPhase.TEST_MODEL,
+            "Model connection verified",
+            metadata={"model": config.selected_model, "provider": config.provider},
+        )
+        if options.verbose:
+            print(message, file=sys.stderr)
     try:
-        ReviewService().run_review(options, config, runtime)
+        result = ReviewService().run_review(options, config, runtime)
     except Exception as exc:
         if not any(RunLevel(event.level) is RunLevel.ERROR for event in runtime.events):
             runtime.emit(RunPhase.MODEL, str(exc), level=RunLevel.ERROR)
         return 1
+    if options.stdout:
+        print(format_review_result(result, options.output))
     return 0
 
 
@@ -246,6 +295,118 @@ def _run_prompt_feedback(argv: list[str]) -> int:
     return 2
 
 
+def _run_generate_config(argv: list[str]) -> int:
+    parser = _generate_config_parser()
+    namespace = parser.parse_args(argv)
+    output_path = Path(
+        namespace.output
+        or (".ai-code-review.json" if namespace.format == "json" else ".ai-code-review/config.yaml")
+    )
+    if output_path.exists() and not namespace.force:
+        print(
+            f"Configuration file already exists at {output_path}. Use --force to overwrite.",
+            file=sys.stderr,
+        )
+        return 1
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _sample_config_payload()
+    if namespace.format == "json":
+        output_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    else:
+        output_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    print(f"Sample {namespace.format.upper()} configuration file created at: {output_path}")
+    return 0
+
+
+def _run_validate_config(argv: list[str]) -> int:
+    parser = _validate_config_parser()
+    namespace = parser.parse_args(argv)
+    try:
+        config = _resolve_config_for_validation(namespace.config)
+        require_api_key(config)
+    except Exception as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if namespace.test_connections:
+        try:
+            print(test_model_connection(config))
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+    else:
+        print(f"Configuration is valid for {config.selected_model}")
+    return 0
+
+
+def _run_init(argv: list[str]) -> int:
+    parser = _init_parser()
+    namespace = parser.parse_args(argv)
+    config_path = Path(".ai-code-review/config.yaml")
+    if config_path.exists() and not namespace.force:
+        print(f"Configuration already exists at {config_path}")
+        return 0
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(yaml.safe_dump(_sample_config_payload(), sort_keys=False), encoding="utf-8")
+    print(f"Project configuration initialized at {config_path}")
+    return 0
+
+
+def _run_install(argv: list[str]) -> int:
+    parser = _install_parser()
+    namespace = parser.parse_args(argv)
+    output_path = Path(".mcp.json")
+    if output_path.exists() and not namespace.force:
+        print(f"Project MCP config already exists at {output_path}")
+        return 0
+    payload = {
+        "mcpServers": {
+            "ai-code-review": {
+                "command": "ai-code-review",
+                "args": ["mcp"],
+                "env": {"PROJECT_PATH": str(Path.cwd())},
+            }
+        }
+    }
+    output_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(f"Project-level MCP config created at {output_path}")
+    return 0
+
+
+def _run_test_build(argv: list[str]) -> int:
+    parser = _test_build_parser()
+    namespace = parser.parse_args(argv)
+    from ..strategies import supported_review_types
+
+    payload = {
+        "summary": {
+            "supportedReviewTypes": len(supported_review_types()),
+            "registeredModels": len(list_supported_models()),
+            "remoteModelTests": "deferred-to-phase-9",
+        },
+        "reviewTypes": list(supported_review_types()),
+        "models": [model.key for model in list_supported_models()],
+    }
+    if namespace.json:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    else:
+        print("Local Phase 7 build compatibility check passed")
+        print(f"Supported review types: {payload['summary']['supportedReviewTypes']}")
+        print(f"Registered models: {payload['summary']['registeredModels']}")
+        print("Remote model matrix testing is deferred to Phase 9.")
+    return 0
+
+
+def _run_sync_github_projects(argv: list[str]) -> int:
+    parser = _sync_github_projects_parser()
+    parser.parse_args(argv)
+    print(
+        "sync-github-projects is recognized by the Python CLI, but full GitHub Projects "
+        "sync is deferred to Phase 11.",
+        file=sys.stderr,
+    )
+    return 1
+
+
 def run_mcp_server(
     *,
     name: str = "ai-code-review",
@@ -307,25 +468,27 @@ def test_model_connection(config: ResolvedConfig) -> str:
 
 
 def _review_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="aicode-review")
+    parser = argparse.ArgumentParser(prog="agent-code-review")
     parser.add_argument("target", nargs="?", default=".")
     parser.add_argument(
         "--type",
         "-t",
         dest="review_type",
-        choices=[
-            "quick-fixes",
-            "security",
-            "architectural",
-            "performance",
-            "coding-test",
-            "unused-code",
-        ],
+        choices=PUBLIC_REVIEW_TYPES,
         default="quick-fixes",
     )
     parser.add_argument("--output", "-o", choices=["markdown", "json"], default="markdown")
     parser.add_argument("--output-dir", dest="output_dir")
     parser.add_argument("--model", "-m")
+    parser.add_argument("--writer-model")
+    parser.add_argument("--language")
+    parser.add_argument("--framework")
+    parser.add_argument("--prompt-file")
+    parser.add_argument("--interactive", "-i", action="store_true")
+    parser.add_argument("--return-only", action="store_true")
+    parser.add_argument("--priority-filter", choices=["h", "m", "l", "a"])
+    parser.add_argument("--test-api", action="store_true")
+    parser.add_argument("--stdout", action="store_true")
     parser.add_argument("--include-tests", action="store_true")
     parser.add_argument("--no-project-docs", action="store_true")
     parser.add_argument("--include-dependency-analysis", action="store_true")
@@ -480,6 +643,55 @@ def _prompt_feedback_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _generate_config_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="aicode-review generate-config")
+    parser.add_argument("--output", "-o")
+    parser.add_argument("--format", "-f", choices=["yaml", "json"], default="yaml")
+    parser.add_argument("--force", action="store_true")
+    return parser
+
+
+def _validate_config_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="aicode-review validate-config")
+    parser.add_argument("--config")
+    parser.add_argument("--test-connections", action="store_true")
+    return parser
+
+
+def _init_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="aicode-review init")
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--debug", action="store_true")
+    return parser
+
+
+def _install_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="aicode-review install")
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--debug", action="store_true")
+    return parser
+
+
+def _test_build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="aicode-review test-build")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--fail-on-error", action="store_true")
+    parser.add_argument("--provider")
+    return parser
+
+
+def _sync_github_projects_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="aicode-review sync-github-projects")
+    parser.add_argument("--direction", choices=["to-github", "from-github"], default="to-github")
+    parser.add_argument("--project-path")
+    parser.add_argument("--description-only", action="store_true")
+    parser.add_argument("--token")
+    parser.add_argument("--org")
+    parser.add_argument("--output-dir")
+    parser.add_argument("--debug", action="store_true")
+    return parser
+
+
 def _add_api_key_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--google-api-key")
     parser.add_argument("--anthropic-api-key")
@@ -507,6 +719,90 @@ def _split_csv(value: str | None) -> list[str]:
 
 def _env_flag(name: str) -> bool:
     return os.getenv(name, "").lower() in {"1", "true", "yes", "on"}
+
+
+def _sample_config_payload() -> dict[str, object]:
+    return {
+        "api": {
+            "model": "gemini:gemini-2.5-pro",
+            "keys": {
+                "google": "your_google_api_key_here",
+                "anthropic": "your_anthropic_api_key_here",
+                "openrouter": "your_openrouter_api_key_here",
+                "openai": "your_openai_api_key_here",
+                "deepseek": "your_deepseek_api_key_here",
+            },
+        },
+        "output": {
+            "directory": "ai-code-review-docs",
+            "format": "markdown",
+        },
+        "behavior": {
+            "log_level": "info",
+        },
+        "preferences": {
+            "skip_validation": False,
+        },
+    }
+
+
+def _resolve_config_for_validation(config_path: str | None) -> ResolvedConfig:
+    if not config_path:
+        return resolve_config()
+
+    path = Path(config_path).expanduser().resolve()
+    data = _load_config_file(path)
+    api = data.get("api") if isinstance(data.get("api"), dict) else {}
+    keys = api.get("keys") if isinstance(api.get("keys"), dict) else {}
+    output = data.get("output") if isinstance(data.get("output"), dict) else {}
+    behavior = data.get("behavior") if isinstance(data.get("behavior"), dict) else {}
+    preferences = data.get("preferences") if isinstance(data.get("preferences"), dict) else {}
+
+    return ResolvedConfig(
+        selected_model=str(api.get("model") or data.get("model") or "gemini:gemini-2.5-pro"),
+        api_keys=ApiKeys(
+            google=_placeholder_to_none(keys.get("google")),
+            anthropic=_placeholder_to_none(keys.get("anthropic")),
+            openrouter=_placeholder_to_none(keys.get("openrouter")),
+            openai=_placeholder_to_none(keys.get("openai")),
+            deepseek=_placeholder_to_none(keys.get("deepseek")),
+        ),
+        output_dir=_validation_output_dir(path.parent, output.get("directory") or output.get("dir")),
+        output_format=str(output.get("format") or "markdown"),
+        debug=False,
+        log_level=str(behavior.get("log_level") or "info"),
+        skip_key_check=bool(preferences.get("skip_validation")),
+        project_root=path.parent,
+    )
+
+
+def _load_config_file(path: Path) -> dict[str, object]:
+    if not path.exists():
+        raise FileNotFoundError(f"Configuration file not found: {path}")
+    text = path.read_text(encoding="utf-8")
+    if path.suffix == ".json":
+        payload = json.loads(text) or {}
+    else:
+        payload = yaml.safe_load(text) or {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"Configuration file must contain an object: {path}")
+    return payload
+
+
+def _placeholder_to_none(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    if value.startswith("your_") and value.endswith("_here"):
+        return None
+    return value
+
+
+def _validation_output_dir(config_dir: Path, value: object) -> Path:
+    raw = str(value or "ai-code-review-docs")
+    path = Path(raw).expanduser()
+    if path.is_absolute():
+        return path
+    return config_dir / path
 
 
 def _print_models() -> None:

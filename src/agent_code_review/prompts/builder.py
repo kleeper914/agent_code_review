@@ -10,6 +10,8 @@ from ..discovery import DiscoveredFile, ProjectContext
 from ..orchestration.types import ReviewOptions
 from ..strategies.base import ContextSection, EnhancedReviewContext, ReviewIntent
 
+from .manager import PromptManager
+
 
 class PromptPackage(BaseModel):
     """Rendered prompt plus metadata passed into the model invocation node."""
@@ -67,20 +69,15 @@ def build_prompt_package(
         tool_context=tool_context,
         memory_context=memory_context,
     )
-    prompt = _format_template(
-        PROMPT_TEMPLATE,
-        title=intent.title,
-        project_name=context.project_name,
-        review_type=options.review_type,
-        instructions=intent.instructions,
-        focus_areas=_bullet_list(intent.focus_areas),
-        output_expectations=_bullet_list(intent.output_expectations),
-        context_block=_context_block(prompt_context),
-        docs_block=_docs_block(context),
-        files_block=_files_block(context, files_override=files_override),
+    rendered = PromptManager().build_prompt(
+        options,
+        context,
+        intent,
+        prompt_context,
+        files_override=files_override,
     )
     return PromptPackage(
-        prompt=prompt,
+        prompt=rendered.prompt,
         intent=intent,
         enhanced_context=prompt_context,
         metadata={
@@ -88,6 +85,7 @@ def build_prompt_package(
             "schema": intent.schema_name,
             "strategy": prompt_context.metadata.get("strategy"),
             "context_sections": len(prompt_context.context_sections),
+            **rendered.metadata,
         },
     )
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .base import BaseLangChainAdapter
+from .registry import ProviderFeatures
 
 
 def create_anthropic_adapter(
@@ -10,26 +11,18 @@ def create_anthropic_adapter(
     model_name: str,
     full_model: str,
     api_key: str,
-    base_url: str | None = None
+    streaming: bool = True,
+    provider_features: ProviderFeatures | None = None,
+    model_warnings: list[str] | None = None,
 ) -> BaseLangChainAdapter:
     from langchain_anthropic import ChatAnthropic
 
-    if base_url is not None:
-        chat_model = ChatAnthropic(
-            model_name=model_name,
-            api_key=api_key,
-            base_url=base_url,
-            streaming=True,
-        )
-    else:
-        chat_model = ChatAnthropic(
-            model_name=model_name,
-            api_key=api_key,
-            streaming=True,
-        )
+    chat_model = ChatAnthropic(model=model_name, api_key=api_key, streaming=streaming)
     return BaseLangChainAdapter(
         provider="anthropic",
         model_name=model_name,
         full_model=full_model,
         chat_model=chat_model,
+        provider_features=provider_features,
+        model_warnings=model_warnings,
     )

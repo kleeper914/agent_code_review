@@ -1,11 +1,4 @@
-"""
-Base classes and helpers for LangChain-backed provider adapters.
-
-含义：
-这是一个用于 LangChain 模型适配器的基础模块。
-它定义了一套统一接口，以及一个基础适配器类，
-用于把 LangChain ChatModel 的输出统一整理成项目内部标准格式。
-"""
+"""Base classes and helpers for LangChain-backed provider adapters."""
 
 from __future__ import annotations
 
@@ -13,36 +6,26 @@ import asyncio
 from collections.abc import AsyncIterator, Iterator
 from typing import Any, Protocol
 
+from .costs import estimate_cost_from_usage
+from .registry import ProviderFeatures
+from .resilience import (
+    GLOBAL_RATE_LIMITER,
+    RetryPolicy,
+    StreamFailureError,
+    classify_error,
+    run_with_retry,
+)
 from .types import GenerationOptions, LLMResponse, TokenUsage
 
 
 class ProviderAdapter(Protocol):
-    """
-    Unified interface consumed by orchestration and strategy code.
-
-    这是一个协议类，用来规定所有模型适配器必须具备哪些属性和方法。
-
-    Protocol 的作用：
-    - 不要求子类显式继承它
-    - 只要某个类拥有相同的属性和方法，就被认为符合这个协议
-    - 适合做“接口约束”
-    """
+    """Unified interface consumed by orchestration and strategy code."""
 
     provider: str
     model_name: str
 
     @property
     def model(self) -> str:
-        """
-        model 是一个只读属性。
-
-        作用：
-        返回完整模型名称。
-        例如：
-        - provider = "openai"
-        - model_name = "gpt-5.5"
-        - model 可能返回 "openai:gpt-5.5"
-        """
         ...
 
     def generate_review(
@@ -50,16 +33,6 @@ class ProviderAdapter(Protocol):
         prompt: str,
         options: GenerationOptions | None = None,
     ) -> LLMResponse:
-        """
-        同步非流式生成方法。
-
-        参数：
-        - prompt：输入给大模型的提示词
-        - options：生成过程的额外配置，可以为空
-
-        返回：
-        - LLMResponse：项目内部统一封装后的响应对象
-        """
         ...
 
     def stream_review(
@@ -67,12 +40,6 @@ class ProviderAdapter(Protocol):
         prompt: str,
         options: GenerationOptions | None = None,
     ) -> Iterator[str]:
-        """
-        同步流式生成方法。
-
-        返回：
-        - Iterator[str]：一个普通迭代器，每次 yield 一个文本片段
-        """
         ...
 
     async def agenerate_review(
@@ -80,14 +47,6 @@ class ProviderAdapter(Protocol):
         prompt: str,
         options: GenerationOptions | None = None,
     ) -> LLMResponse:
-        """
-        异步非流式生成方法。
-
-        async 表示这是异步函数，需要 await 调用。
-
-        返回：
-        - LLMResponse：统一响应对象
-        """
         ...
 
     def astream_review(
@@ -95,27 +54,11 @@ class ProviderAdapter(Protocol):
         prompt: str,
         options: GenerationOptions | None = None,
     ) -> AsyncIterator[str]:
-        """
-        异步流式生成方法。
-
-        返回：
-        - AsyncIterator[str]：异步迭代器，需要使用 async for 消费
-        """
         ...
 
 
 class BaseLangChainAdapter:
-    """
-    Adapter that normalizes LangChain chat model responses.
-
-    这是一个基础适配器类。
-
-    它的主要作用：
-    - 包装 LangChain 的 chat_model
-    - 屏蔽不同模型返回格式的差异
-    - 把结果统一转换成 LLMResponse
-    - 同时支持同步、异步、流式、非流式四种调用方式
-    """
+    """Adapter that normalizes LangChain chat model responses."""
 
     def __init__(
         self,
@@ -124,30 +67,19 @@ class BaseLangChainAdapter:
         model_name: str,
         full_model: str,
         chat_model: Any,
+        provider_features: ProviderFeatures | None = None,
+        model_warnings: list[str] | None = None,
+        retry_policy: RetryPolicy | None = None,
+        rate_limiter: Any | None = None,
     ) -> None:
-        """
-        构造函数，用于初始化适配器对象。
-
-        参数解释：
-        - provider：模型服务商，例如 openai、anthropic
-        - model_name：模型名称，例如 gpt-5.5
-        - full_model：完整模型标识，例如 openai:gpt-5.5
-        - chat_model：实际的 LangChain ChatModel 对象
-
-        注意：
-        参数列表中的 * 表示后面的参数必须用关键字传入。
-        例如：
-        BaseLangChainAdapter(
-            provider="openai",
-            model_name="gpt-5.5",
-            full_model="openai:gpt-5.5",
-            chat_model=model
-        )
-        """
         self.provider = provider
         self.model_name = model_name
         self._full_model = full_model
         self._chat_model = chat_model
+        self._provider_features = provider_features or ProviderFeatures()
+        self._model_warnings = model_warnings or []
+        self._retry_policy = retry_policy or RetryPolicy()
+        self._rate_limiter = rate_limiter if rate_limiter is not None else GLOBAL_RATE_LIMITER
 
     @property
     def model(self) -> str:
@@ -159,25 +91,55 @@ class BaseLangChainAdapter:
         options: GenerationOptions | None = None,
     ) -> LLMResponse:
         if options and options.tools and callable(getattr(self._chat_model, "bind_tools", None)):
-            return self._generate_with_tools(prompt, options)
+            response, attempts = run_with_retry(
+                lambda: self._generate_with_tools(prompt, options),
+                provider=self.provider,
+                model=self.model,
+                retry_policy=self._retry_policy,
+                rate_limiter=self._rate_limiter,
+            )
+            response.metadata.update(self._response_metadata(response.usage, attempts=attempts))
+            return response
 
-        parts: list[str] = []
-        raw_chunks: list[Any] = []
-        usage = TokenUsage()
-        for raw, text in self._stream_raw_chunks(prompt):
-            raw_chunks.append(raw)
-            extracted_usage = _extract_usage(raw)
-            if _has_usage(extracted_usage):
-                usage = extracted_usage
-            if not text:
-                continue
-            parts.append(text)
-            _emit_chunk(options, text)
+        try:
+            (raw_chunks, parts, usage), attempts = run_with_retry(
+                lambda: self._collect_raw_chunks(
+                    prompt,
+                    emit_options=options,
+                    allow_stream=self._provider_features.supports_streaming,
+                ),
+                provider=self.provider,
+                model=self.model,
+                retry_policy=self._retry_policy,
+                rate_limiter=self._rate_limiter,
+            )
+            resilience_metadata = {"attempts": attempts}
+        except BaseException as exc:
+            classified = classify_error(exc, self.provider)
+            if self._provider_features.supports_streaming and classified.retryable:
+                response, attempts = run_with_retry(
+                    lambda: self._to_response(self._chat_model.invoke(prompt)),
+                    provider=self.provider,
+                    model=self.model,
+                    retry_policy=self._retry_policy,
+                    rate_limiter=self._rate_limiter,
+                )
+                response.metadata.update(
+                    self._response_metadata(
+                        response.usage,
+                        attempts=attempts,
+                        stream_fallback=True,
+                    )
+                )
+                return response
+            raise
+
         return LLMResponse(
             content="".join(parts),
             usage=usage,
             raw=raw_chunks,
             model=self.model,
+            metadata=self._response_metadata(usage, **resilience_metadata),
         )
 
     def stream_review(
@@ -185,7 +147,10 @@ class BaseLangChainAdapter:
         prompt: str,
         options: GenerationOptions | None = None,
     ) -> Iterator[str]:
-        for _raw, text in self._stream_raw_chunks(prompt):
+        for _raw, text in self._stream_raw_chunks(
+            prompt,
+            allow_stream=self._provider_features.supports_streaming,
+        ):
             if not text:
                 continue
             _emit_chunk(options, text)
@@ -199,7 +164,10 @@ class BaseLangChainAdapter:
         parts: list[str] = []
         raw_chunks: list[Any] = []
         usage = TokenUsage()
-        async for raw, text in self._astream_raw_chunks(prompt):
+        async for raw, text in self._astream_raw_chunks(
+            prompt,
+            allow_stream=self._provider_features.supports_streaming,
+        ):
             raw_chunks.append(raw)
             extracted_usage = _extract_usage(raw)
             if _has_usage(extracted_usage):
@@ -213,6 +181,7 @@ class BaseLangChainAdapter:
             usage=usage,
             raw=raw_chunks,
             model=self.model,
+            metadata=self._response_metadata(usage),
         )
 
     async def astream_review(
@@ -220,68 +189,83 @@ class BaseLangChainAdapter:
         prompt: str,
         options: GenerationOptions | None = None,
     ) -> AsyncIterator[str]:
-        async for _raw, text in self._astream_raw_chunks(prompt):
+        async for _raw, text in self._astream_raw_chunks(
+            prompt,
+            allow_stream=self._provider_features.supports_streaming,
+        ):
             if not text:
                 continue
             _emit_chunk(options, text)
             yield text
 
     def _to_response(self, raw: Any) -> LLMResponse:
-        """
-        把一个原始 LangChain 响应对象转换成 LLMResponse。
-
-        raw 可能是：
-        - LangChain 的 AIMessage
-        - 普通字符串
-        - 带 content 字段的对象
-        """
         content = _normalize_content(getattr(raw, "content", raw))
+        usage = _extract_usage(raw)
         return LLMResponse(
             content=content,
-            usage=_extract_usage(raw),
+            usage=usage,
             raw=raw,
             model=self.model,
+            metadata=self._response_metadata(usage),
         )
-    
+
     def _generate_with_tools(self, prompt: str, options: GenerationOptions) -> LLMResponse:
-        """
-        Run one provider-native tool-calling turn through LangChain when available.
-        """
+        """Run one provider-native tool-calling turn through LangChain when available."""
+
         try:
             from langchain_core.messages import HumanMessage, ToolMessage
         except Exception:
             return self._to_response(self._chat_model.invoke(prompt))
-        
+
         bound_model = self._chat_model.bind_tools(options.tools)
         initial = bound_model.invoke(prompt)
         tool_calls = getattr(initial, "tool_calls", None) or []
         if not tool_calls:
             return self._to_response(initial)
-        
+
         messages: list[Any] = [HumanMessage(content=prompt), initial]
         for index, call in enumerate(tool_calls):
             try:
                 result = options.tool_executor(call) if options.tool_executor else "No tool executor configured."
             except Exception as exc:
-                result = f"Tool executor failed: {exc}"
+                result = f"Tool execution failed: {exc}"
             tool_call_id = _tool_call_id(call, index)
             messages.append(ToolMessage(content=str(result), tool_call_id=tool_call_id))
-        
+
         final = self._chat_model.invoke(messages)
         return self._to_response(final)
 
-    def _stream_raw_chunks(self, prompt: str) -> Iterator[tuple[Any, str]]:
-        """
-        同步获取原始 chunk。
+    def _collect_raw_chunks(
+        self,
+        prompt: str,
+        *,
+        emit_options: GenerationOptions | None,
+        allow_stream: bool,
+    ) -> tuple[list[Any], list[str], TokenUsage]:
+        parts: list[str] = []
+        raw_chunks: list[Any] = []
+        usage = TokenUsage()
+        try:
+            for raw, text in self._stream_raw_chunks(prompt, allow_stream=allow_stream):
+                raw_chunks.append(raw)
+                extracted_usage = _extract_usage(raw)
+                if _has_usage(extracted_usage):
+                    usage = extracted_usage
+                if not text:
+                    continue
+                parts.append(text)
+                _emit_chunk(emit_options, text)
+        except BaseException as exc:
+            if parts:
+                raise StreamFailureError(
+                    f"{self.provider} stream failed after partial output: {exc}"
+                ) from exc
+            raise
+        return raw_chunks, parts, usage
 
-        这个方法是整个同步调用链的核心。
-
-        它会优先尝试使用 chat_model.stream(prompt)。
-        如果底层模型不支持 stream，
-        就退化为 chat_model.invoke(prompt)。
-        """
+    def _stream_raw_chunks(self, prompt: str, *, allow_stream: bool = True) -> Iterator[tuple[Any, str]]:
         stream = getattr(self._chat_model, "stream", None)
-        if callable(stream):
+        if allow_stream and callable(stream):
             for raw in stream(prompt):
                 yield raw, _normalize_content(getattr(raw, "content", raw))
             return
@@ -289,22 +273,42 @@ class BaseLangChainAdapter:
         message = self._chat_model.invoke(prompt)
         yield message, _normalize_content(getattr(message, "content", message))
 
-    async def _astream_raw_chunks(self, prompt: str) -> AsyncIterator[tuple[Any, str]]:
-        """
-        异步获取原始 chunk。
-
-        优先使用 chat_model.astream(prompt)。
-        如果底层模型不支持 astream，
-        就把同步流式逻辑放到线程中执行。
-        """
+    async def _astream_raw_chunks(
+        self,
+        prompt: str,
+        *,
+        allow_stream: bool = True,
+    ) -> AsyncIterator[tuple[Any, str]]:
         astream = getattr(self._chat_model, "astream", None)
-        if callable(astream):
+        if allow_stream and callable(astream):
             async for raw in astream(prompt):
                 yield raw, _normalize_content(getattr(raw, "content", raw))
             return
 
-        for raw, text in await asyncio.to_thread(lambda: list(self._stream_raw_chunks(prompt))):
+        for raw, text in await asyncio.to_thread(
+            lambda: list(self._stream_raw_chunks(prompt, allow_stream=allow_stream))
+        ):
             yield raw, text
+
+    def _response_metadata(
+        self,
+        usage: TokenUsage,
+        *,
+        attempts: int | None = None,
+        stream_fallback: bool = False,
+    ) -> dict[str, Any]:
+        metadata: dict[str, Any] = {}
+        cost = estimate_cost_from_usage(usage, self.model)
+        if cost is not None:
+            metadata["cost"] = cost.to_metadata()
+        if self._model_warnings:
+            metadata["modelWarnings"] = self._model_warnings
+        if attempts is not None or stream_fallback:
+            metadata["resilience"] = {
+                "attempts": attempts or 1,
+                "streamFallback": stream_fallback,
+            }
+        return metadata
 
 
 def _normalize_content(content: Any) -> str:

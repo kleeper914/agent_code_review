@@ -1,0 +1,211 @@
+---
+name: TypeScript Code Tracing Unused Code Finder
+description: Performs deep code tracing to verify unreferenced files and functions in TypeScript codebases
+version: 1.0.0
+author: AI Code Review Tool
+reviewType: unused-code
+language: typescript
+tags:
+  - typescript
+  - code-tracing
+  - static-analysis
+  - dead-code-elimination
+  - multi-pass
+lastModified: '2025-04-24'
+---
+
+# Code Path Tracing and Unused Code Detection
+
+I WILL PERFORM comprehensive code path analysis on this codebase. I will:
+
+1. TRACE ALL import paths for each file and function
+2. BUILD a complete dependency graph showing exactly what uses what
+3. VERIFY which code is actually referenced or executed
+4. IDENTIFY with certainty which code can be safely removed
+
+I understand I must DO the code path tracing myself, not merely suggest it. For each element I analyze, I will:
+
+1. SHOW the exact import chain for each module
+2. MAP all references across files
+3. VERIFY if a function/class is actually called
+
+For duplicate utilities (e.g., when both `/src/utils/X.ts` and `/src/utils/files/X.ts` exist):
+- I will ANALYZE which version is actually imported
+- I will COUNT references to each version
+- I will DETERMINE which should be removed
+- I will SPECIFY exact file edits needed
+
+## MY CODE TRACING PROCESS
+
+I will execute this process methodically:
+
+### PASS 1: BUILD THE IMPORT MAP
+1. I will scan ALL entry points:
+   - package.json main/bin entries
+   - index.ts files
+   - main.ts, app.ts, server.ts
+   - All test files
+2. I will map ALL module relationships:
+   - I will trace each ES6 import/export
+   - I will follow all barrel file re-exports
+   - I will track type-only imports
+   - I will identify dynamic imports
+
+### PASS 2: TRACE USAGE PATHS
+For every exported element:
+1. I will find ALL import statements
+2. I will count references by file
+3. I will map how utility functions flow through the codebase
+4. I will specifically trace through:
+   - src/utils/index.ts
+   - src/utils/files/index.ts
+   - src/utils/parsing/index.ts
+   - src/utils/api/index.ts
+5. I will check for calls to each function
+6. I will verify class instantiations
+7. I will track JSX component usage
+
+### PASS 3: IDENTIFY DUPLICATE UTILITIES
+I will examine closely when I find:
+1. Same-named files in different directories
+2. Similar functions across utils/ subdirectories
+3. I will determine which is:
+   - Used more frequently
+   - The canonical version
+   - Safe to remove
+
+### PASS 4: GENERATE CONCRETE ACTIONS
+For each unused element:
+1. I will specify EXACTLY what to remove
+2. I will list ALL file edits needed
+3. I will include precise line numbers
+4. I will update affected barrel files
+5. I will generate clear removal steps
+
+## WHAT I WILL FIND AND REMOVE
+
+I will focus on these exact issues:
+
+1. **DUPLICATE UTILITY FILES**:
+   - Same functionality in multiple locations
+   - Versions in both utils/ and utils/subdirectories
+
+2. **COMPLETELY UNUSED FILES**:
+   - .ts files never imported anywhere
+   - Barrel files exporting unused elements
+
+3. **DEAD EXPORTS**:
+   - Functions exported but never imported
+   - Classes/interfaces never referenced
+   - Types never used in annotations
+
+4. **REDUNDANT CODE PATHS**:
+   - Unreachable conditional blocks
+   - Code behind always-false conditions
+
+## MY OUTPUT FORMAT
+
+For each issue, I will provide:
+
+1. **CONCRETE FINDINGS**:
+   ```
+   DUPLICATE: Found matching utilities:
+     - src/utils/projectDocs.ts
+     - src/utils/files/projectDocs.ts
+   ```
+
+2. **COMPREHENSIVE EVIDENCE**:
+   ```
+   IMPORTS TRACED:
+     - src/utils/projectDocs.ts: 0 direct imports
+     - src/utils/files/projectDocs.ts: 5 imports via barrel file
+
+   BARREL FILE ANALYSIS:
+     - src/utils/index.ts: exports { projectDocs } from './projectDocs'
+     - src/utils/files/index.ts: exports { projectDocs } from './projectDocs'
+
+   REFERENCES:
+     - Only the files/ version is imported by application code
+     - The utils/ version is only imported by its duplicate
+   ```
+
+3. **EXACT ACTIONS TO TAKE**:
+   ```
+   REQUIRED CHANGES:
+     1. REMOVE file: src/utils/projectDocs.ts
+     2. EDIT file: src/utils/index.ts
+        - REMOVE line: export { projectDocs } from './projectDocs'
+     3. EDIT file: src/utils/files/projectDocs.ts
+        - REMOVE import { projectDocs as baseProjectDocs } from '../index'
+        - ADD any functionality from original file
+   ```
+
+{{#if schemaInstructions}}
+{{{schemaInstructions}}}
+{{/if}}
+
+## VERIFICATION CHECKLIST - I MUST DO ALL OF THESE
+
+1. ✅ CHECK FOR FILE PAIRS:
+   - Search for duplicate files with same name in different directories
+   - Compare content and functionality
+   - Verify which is imported where
+
+2. ✅ COMPLETE IMPORT CHAIN ANALYSIS:
+   - Follow ALL imports through barrel files
+   - Map EVERY import statement in the codebase
+   - Count exact references to each utility
+
+3. ✅ EXAMINE CODE DEPENDENCIES:
+   - Find which files ACTUALLY use each function
+   - Check if a utility only exists to support a removed feature
+   - Verify circular dependencies
+
+4. ✅ HANDLE TYPESCRIPT-SPECIFIC CASES:
+   - Type-only imports
+   - Interface inheritance
+   - Type annotations
+   - Generic constraints
+
+## EXAMPLE OUTPUT FORMAT
+
+```
+===== DUPLICATE UTILITY DETECTION =====
+
+DUPLICATE: Found duplicate utilities:
+  - src/utils/projectDocs.ts
+  - src/utils/files/projectDocs.ts
+
+IMPORT TRACING RESULTS:
+  • src/utils/projectDocs.ts:
+    - EXPORTED BY: src/utils/index.ts
+    - DIRECT IMPORTS: 0 files
+    - INDIRECT IMPORTS: 1 file (only by its duplicate)
+
+  • src/utils/files/projectDocs.ts:
+    - EXPORTED BY: src/utils/files/index.ts
+    - DIRECT IMPORTS: 0 files
+    - BARREL IMPORTS: 5 files
+      1. src/commands/reviewCode.ts
+      2. src/core/ReviewGenerator.ts
+      3. src/handlers/architecturalReviewHandler.ts
+      4. src/handlers/consolidatedReviewHandler.ts
+      5. src/prompts/PromptBuilder.ts
+
+CODE PATH VERIFICATION:
+  • CONFIRMED: Only the files/ version is used by application code
+  • FOUND: The duplicate imports from the original
+  • VERIFIED: All functionality can be consolidated in files/ version
+
+RECOMMENDED ACTIONS:
+  1. REMOVE file src/utils/projectDocs.ts
+  2. EDIT src/utils/index.ts:
+     - Remove: export { projectDocs } from './projectDocs'
+  3. EDIT src/utils/files/projectDocs.ts:
+     - Remove: import { projectDocs as baseProjectDocs } from '../index'
+     - Add any unique functionality from the original file
+
+CONFIDENCE: HIGH - Clear evidence shows only files/ version is used
+```
+
+I will ONLY focus on code path tracing and unused code identification. I will NOT include style suggestions, refactoring ideas, or any advice unrelated to dead code removal.

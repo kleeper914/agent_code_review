@@ -46,6 +46,9 @@ class SemanticAnalysis(BaseModel):
     declarations: list[Declaration] = Field(default_factory=list)
     imports: list[ImportRelationship] = Field(default_factory=list)
     complexity: dict[str, int] = Field(default_factory=dict)
+    parser: str = "unknown"
+    parser_available: bool = False
+    fallback_reason: str | None = None
 
 
 class SemanticChunkingResult(BaseModel):
@@ -131,6 +134,9 @@ def analyze_semantic_chunks(
 
 
 def _analyze_file(file: DiscoveredFile, language: str) -> SemanticAnalysis:
+    tree_sitter_analysis = _try_tree_sitter_analysis(file, language)
+    if tree_sitter_analysis is not None:
+        return tree_sitter_analysis
     if language == "python":
         return _analyze_python(file)
     return _analyze_with_regex(file, language)
@@ -168,6 +174,9 @@ def _analyze_python(file: DiscoveredFile) -> SemanticAnalysis:
             "classCount": sum(1 for item in declarations if item.type == "class"),
             "totalDeclarations": len(declarations),
         },
+        parser="python_ast",
+        parser_available=True,
+        fallback_reason="tree_sitter_unavailable",
     )
 
 
@@ -211,14 +220,22 @@ def _analyze_with_regex(file: DiscoveredFile, language: str) -> SemanticAnalysis
         ("function", re.compile(r"^\s*(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(")),
         ("function", re.compile(r"^\s*def\s+([A-Za-z_][\w]*)")),
     ]
-    import_pattern = re.compile(r"^\s*(?:import|from|require)\b(.+)")
+    import_pattern = re.compile(
+        r"^\s*(?:import\s+.+?\s+from\s+['\"]([^'\"]+)['\"]|"
+        r"import\s+['\"]([^'\"]+)['\"]|"
+        r"from\s+([A-Za-z0-9_.]+)\s+import|"
+        r"import\s+([A-Za-z0-9_.]+)|"
+        r"require\s+['\"]([^'\"]+)['\"]|"
+        r"use\s+([^;]+);)"
+    )
 
     for index, line in enumerate(lines, start=1):
         if match := import_pattern.search(line):
+            module = next((group for group in match.groups() if group), match.group(0))
             imports.append(
                 ImportRelationship(
-                    imported=match.group(1).strip()[:80],
-                    from_module=match.group(1).strip()[:80],
+                    imported=module.strip()[:80],
+                    from_module=module.strip()[:80],
                     line=index,
                 )
             )
@@ -252,7 +269,213 @@ def _analyze_with_regex(file: DiscoveredFile, language: str) -> SemanticAnalysis
             "classCount": sum(1 for item in declarations if item.type == "class"),
             "totalDeclarations": len(declarations),
         },
+        parser="regex",
+        parser_available=False,
+        fallback_reason="tree_sitter_unavailable",
     )
+
+
+def _try_tree_sitter_analysis(file: DiscoveredFile, language: str) -> SemanticAnalysis | None:
+    parser_info = _tree_sitter_parser(language)
+    if parser_info is None:
+        return None
+    parser, parser_name = parser_info
+    source = file.content.encode("utf-8")
+    tree = parser.parse(source)
+    root = tree.root_node
+    lines = file.content.splitlines() or [""]
+    declarations: list[Declaration] = []
+    imports: list[ImportRelationship] = []
+
+    def visit(node: Any, depth: int = 0) -> None:
+        node_type = getattr(node, "type", "")
+        if node_type in _tree_sitter_declaration_types(language):
+            declaration = _declaration_from_tree_sitter_node(node, source, lines, language)
+            if declaration is not None:
+                declarations.append(declaration)
+        if node_type in _tree_sitter_import_types(language):
+            import_ = _import_from_tree_sitter_node(node, source)
+            if import_ is not None:
+                imports.append(import_)
+        for child in getattr(node, "children", []):
+            visit(child, depth + 1)
+
+    visit(root)
+    return SemanticAnalysis(
+        language=language,
+        file_path=file.relative_path,
+        total_lines=len(lines),
+        declarations=declarations,
+        imports=imports,
+        complexity={
+            "cyclomaticComplexity": sum(item.cyclomatic_complexity for item in declarations),
+            "functionCount": sum(1 for item in declarations if item.type == "function"),
+            "classCount": sum(1 for item in declarations if item.type == "class"),
+            "totalDeclarations": len(declarations),
+        },
+        parser=parser_name,
+        parser_available=True,
+        fallback_reason="parse_error" if getattr(root, "has_error", False) else None,
+    )
+
+
+def _tree_sitter_parser(language: str) -> tuple[Any, str] | None:
+    try:
+        from tree_sitter import Language, Parser
+    except Exception:
+        return None
+
+    try:
+        grammar = _tree_sitter_language(language)
+        if grammar is None:
+            return None
+        ts_language = Language(grammar) if not isinstance(grammar, Language) else grammar
+        parser = Parser()
+        if hasattr(parser, "set_language"):
+            parser.set_language(ts_language)
+        else:
+            parser.language = ts_language
+        return parser, "tree_sitter"
+    except Exception:
+        return None
+
+
+def _tree_sitter_language(language: str) -> Any | None:
+    if language == "python":
+        import tree_sitter_python
+
+        return tree_sitter_python.language()
+    if language in {"javascript", "typescript"}:
+        import tree_sitter_typescript
+
+        if language == "javascript" and hasattr(tree_sitter_typescript, "language_tsx"):
+            return tree_sitter_typescript.language_tsx()
+        if hasattr(tree_sitter_typescript, "language_typescript"):
+            return tree_sitter_typescript.language_typescript()
+        return tree_sitter_typescript.language()
+    if language == "ruby":
+        import tree_sitter_ruby
+
+        return tree_sitter_ruby.language()
+    if language == "php":
+        import tree_sitter_php
+
+        return tree_sitter_php.language()
+    return None
+
+
+def _tree_sitter_declaration_types(language: str) -> set[str]:
+    return {
+        "typescript": {
+            "function_declaration",
+            "class_declaration",
+            "interface_declaration",
+            "type_alias_declaration",
+            "lexical_declaration",
+        },
+        "javascript": {"function_declaration", "class_declaration", "lexical_declaration"},
+        "python": {"function_definition", "class_definition"},
+        "ruby": {"method", "class", "module"},
+        "php": {"function_definition", "method_declaration", "class_declaration", "interface_declaration"},
+    }.get(language, set())
+
+
+def _tree_sitter_import_types(language: str) -> set[str]:
+    return {
+        "typescript": {"import_statement"},
+        "javascript": {"import_statement"},
+        "python": {"import_statement", "import_from_statement"},
+        "ruby": {"call"},
+        "php": {"namespace_use_declaration", "use_declaration"},
+    }.get(language, set())
+
+
+def _declaration_from_tree_sitter_node(
+    node: Any,
+    source: bytes,
+    lines: list[str],
+    language: str,
+) -> Declaration | None:
+    text = source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
+    name = _extract_name_from_text(text, language) or _named_child_text(node, source)
+    if not name:
+        return None
+    start = node.start_point[0] + 1
+    end = node.end_point[0] + 1
+    kind = _declaration_kind(getattr(node, "type", ""))
+    return Declaration(
+        type=kind,
+        name=name,
+        start_line=start,
+        end_line=end,
+        dependencies=_identifier_dependencies(text, name),
+        cyclomatic_complexity=_line_range_complexity(lines[start - 1 : end]),
+        export_status="exported" if re.search(r"\bexport\b", text) else "internal",
+    )
+
+
+def _import_from_tree_sitter_node(node: Any, source: bytes) -> ImportRelationship | None:
+    text = source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
+    module = _extract_import_module(text)
+    if not module:
+        return None
+    return ImportRelationship(
+        imported=module,
+        from_module=module,
+        import_type="named" if "{" in text or " import " in text else "default",
+        line=node.start_point[0] + 1,
+    )
+
+
+def _named_child_text(node: Any, source: bytes) -> str | None:
+    for child in getattr(node, "children", []):
+        if getattr(child, "type", "") in {"identifier", "constant", "name"}:
+            return source[child.start_byte : child.end_byte].decode("utf-8", errors="replace")
+    return None
+
+
+def _extract_name_from_text(text: str, language: str) -> str | None:
+    patterns = [
+        r"\b(?:class|interface|function|def|module)\s+([A-Za-z_$][\w$]*)",
+        r"\bconst\s+([A-Za-z_$][\w$]*)\s*=",
+        r"\btype\s+([A-Za-z_$][\w$]*)\s*=",
+    ]
+    if language == "php":
+        patterns.insert(0, r"\b(?:class|interface|function)\s+([A-Za-z_][\w]*)")
+    for pattern in patterns:
+        if match := re.search(pattern, text):
+            return match.group(1)
+    return None
+
+
+def _extract_import_module(text: str) -> str | None:
+    patterns = [
+        r"from\s+['\"]([^'\"]+)['\"]",
+        r"import\s+['\"]([^'\"]+)['\"]",
+        r"from\s+([A-Za-z0-9_.]+)\s+import",
+        r"import\s+([A-Za-z0-9_.]+)",
+        r"require\s+['\"]([^'\"]+)['\"]",
+        r"use\s+([^;]+);",
+    ]
+    for pattern in patterns:
+        if match := re.search(pattern, text):
+            return match.group(1).strip()
+    return None
+
+
+def _declaration_kind(node_type: str) -> str:
+    if "class" in node_type:
+        return "class"
+    if "interface" in node_type:
+        return "interface"
+    if "type_alias" in node_type:
+        return "type"
+    return "function"
+
+
+def _identifier_dependencies(text: str, name: str) -> list[str]:
+    identifiers = set(re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", text))
+    return sorted(identifier for identifier in identifiers if identifier != name)[:20]
 
 
 def _units_from_analysis(

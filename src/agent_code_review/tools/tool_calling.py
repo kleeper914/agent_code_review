@@ -8,23 +8,21 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from ..llm_clients.registry import supports_tool_calling
+
 from .dependency_discovery import DependencyInfo, discover_dependencies, format_dependencies
 from .dependency_security import batch_search_dependency_security, search_dependency_security
 
 
 class ToolCallSpec(BaseModel):
-    """
-    Provider-neutral tool call request.
-    """
+    """Provider-neutral tool call request."""
 
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolExecutionResult(BaseModel):
-    """
-    Result returned from a function-call tool.
-    """
+    """Result returned from a function-call tool."""
 
     tool_name: str
     result: str
@@ -33,9 +31,7 @@ class ToolExecutionResult(BaseModel):
 
 
 class DependencyToolContext(BaseModel):
-    """
-    Dependency analysis context prepared for prompts and optional tool binding,
-    """
+    """Dependency analysis context prepared for prompts and optional tool binding."""
 
     enabled: bool
     skipped_reason: str | None = None
@@ -52,17 +48,11 @@ DEPENDENCY_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "parameters": {
             "type": "object",
             "properties": {
-                "package_name": {
-                    "type": "string"
-                },
-                "package_version": {
-                    "type": "string"
-                },
-                "ecosystem": {
-                    "type": "string",
-                    "enum": ["npm", "composer", "pip", "gem"]
-                },
+                "package_name": {"type": "string"},
+                "package_version": {"type": "string"},
+                "ecosystem": {"type": "string", "enum": ["npm", "composer", "pip", "gem"]},
             },
+            "required": ["package_name", "ecosystem"],
         },
     },
     {
@@ -76,27 +66,18 @@ DEPENDENCY_TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "items": {
                         "type": "object",
                         "properties": {
-                            "name": {
-                                "type": "string"
-                            },
-                            "version": {
-                                "type": "string"
-                            }
+                            "name": {"type": "string"},
+                            "version": {"type": "string"},
                         },
                         "required": ["name"],
                     },
                 },
-                "ecosystem": {
-                    "type": "string",
-                    "enum": ["npm", "composer", "pip", "gem"],
-                },
-                "limit": {
-                    "type": "number"
-                },
+                "ecosystem": {"type": "string", "enum": ["npm", "composer", "pip", "gem"]},
+                "limit": {"type": "number"},
             },
             "required": ["packages", "ecosystem"],
-        }
-    }
+        },
+    },
 ]
 
 
@@ -114,14 +95,14 @@ def prepare_dependency_tool_context(
     if not should_use:
         return DependencyToolContext(
             enabled=False,
-            skipped_reason="Dependency analysis was not requested for this review type.",
+            skipped_reason="Dependency analysis was not requested for this review type",
             dependencies=dependencies,
-            static_context=static_context
+            static_context=static_context,
         )
-    if provider not in {"openai", "anthropic", "openrouter", "deepseek"}:
+    if not supports_tool_calling(model_name):
         return DependencyToolContext(
             enabled=False,
-            skipped_reason=f"Provider {provider} does not support dependency tool calling",
+            skipped_reason=f"Model {model_name} does not support dependency tool calling",
             dependencies=dependencies,
             static_context=static_context,
         )

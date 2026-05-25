@@ -12,11 +12,22 @@ from ..analysis.semantic import analyze_semantic_chunks
 from ..config import ResolvedConfig, resolve_config
 from ..discovery import DiscoveredFile, ProjectContext, discover_project_context
 from ..llm_clients import GenerationOptions, LLMResponse, create_llm_client
+from ..llm_clients.costs import (
+    CostInfo,
+    aggregate_costs,
+    estimate_cost_from_usage,
+    usage_from_cost,
+)
 from ..memory import FileMemoryStore, MemoryEntry
 from ..observability import get_observability
 from ..prompts import PromptPackage, build_prompt_package
 from ..runtime import RunLevel, RunPhase, RuntimeContext, create_runtime
-from ..strategies import EnhancedReviewContext, ReviewIntent, ReviewStrategy, get_strategy
+from ..strategies import (
+    EnhancedReviewContext,
+    ReviewIntent,
+    ReviewStrategy,
+    get_strategy,
+)
 from ..tools import (
     DependencyToolContext,
     ToolCallSpec,
@@ -24,7 +35,7 @@ from ..tools import (
     prepare_dependency_tool_context,
 )
 
-from .reports import save_review_result
+from .output_manager import OutputManager
 from .types import PassResult, ReviewOptions, ReviewResult
 
 
@@ -73,15 +84,33 @@ def run_review(
     }
     final_state = _run_langgraph_workflow(state)
     result = final_state["result"]
+    if options.stdout or options.return_only:
+        result.metadata["stdout"] = True
+        result.metadata["returnOnly"] = options.return_only
+        resolved_runtime.emit(
+            RunPhase.REPORT,
+            "Report file skipped by output policy",
+            metadata={
+                "format": options.output,
+                "stdout": options.stdout,
+                "returnOnly": options.return_only,
+            },
+        )
+        return result
     started = datetime.now(timezone.utc)
     with get_observability().start_span(
         "orchestration.save_report",
         {"format": options.output, "review_type": options.review_type},
     ):
-        output_path = save_review_result(result, resolved_config.output_dir, options.output)
+        artifact = OutputManager(resolved_config.output_dir).save(result, options)
     duration_ms = (datetime.now(timezone.utc) - started).total_seconds() * 1000
-    result.output_path = output_path
-    result.metadata["outputPath"] = str(output_path)
+    output_path = artifact.output_path
+    if artifact.raw_data_path:
+        result.metadata["rawDataPath"] = str(artifact.raw_data_path)
+    if artifact.diagram_paths:
+        result.metadata["diagramPaths"] = [str(path) for path in artifact.diagram_paths]
+    if artifact.removal_script_path:
+        result.metadata["removalScriptPath"] = str(artifact.removal_script_path)
     resolved_runtime.emit(
         RunPhase.REPORT,
         "Report saved",
@@ -195,6 +224,8 @@ def _discover_context(state: ReviewState) -> ReviewState:
             "target": options.target,
             "fileCount": len(context.files),
             "docCount": len(context.docs),
+            "language": context.detection.language,
+            "framework": context.detection.framework,
         },
         duration_ms=duration_ms,
     )
@@ -361,6 +392,7 @@ def _invoke_model(state: ReviewState) -> ReviewState:
             duration_ms=duration_ms,
         )
         raise
+    _ensure_response_cost_metadata(response)
     duration_ms = (datetime.now(timezone.utc) - started).total_seconds() * 1000
     runtime.emit(
         RunPhase.MODEL,
@@ -369,6 +401,9 @@ def _invoke_model(state: ReviewState) -> ReviewState:
             "model": response.model,
             "provider": config.provider,
             "usage": response.usage.model_dump(exclude_none=True),
+            "cost": response.metadata.get("cost"),
+            "modelWarnings": response.metadata.get("modelWarnings", []),
+            "resilience": response.metadata.get("resilience", {}),
         },
         duration_ms=duration_ms,
     )
@@ -409,12 +444,22 @@ def _build_result(state: ReviewState) -> ReviewState:
             "provider": config.provider,
             "model": response.model,
             "usage": response.usage.model_dump(exclude_none=True),
+            "cost": response.metadata.get("cost"),
+            "modelWarnings": response.metadata.get("modelWarnings", []),
             "fileCount": len(context.files),
             "docCount": len(context.docs),
+            "language": options.language,
+            "detectedLanguage": context.detection.language,
+            "framework": options.framework,
+            "detectedFramework": context.detection.framework,
+            "detection": context.detection.model_dump(),
+            "fileTree": context.file_tree,
+            "discovery": context.discovery_metadata,
+            "writerModel": options.writer_model,
+            "interactive": options.interactive,
+            "stdout": options.stdout,
             "strategy": enhanced_context.metadata.get("strategy"),
-            "context_enhancers": [
-                section.title for section in enhanced_context.context_sections
-            ],
+            "context_enhancers": [section.title for section in enhanced_context.context_sections],
             "prompt": prompt_package.metadata,
             "tokenAnalysis": _token_analysis_metadata(state.get("token_analysis")),
             "chunkPlan": _chunk_plan_metadata(state.get("review_chunks", [])),
@@ -449,6 +494,16 @@ def _build_estimate_result(state: ReviewState) -> ReviewState:
             "model": config.selected_model,
             "fileCount": len(context.files),
             "docCount": len(context.docs),
+            "language": options.language,
+            "detectedLanguage": context.detection.language,
+            "framework": options.framework,
+            "detectedFramework": context.detection.framework,
+            "detection": context.detection.model_dump(),
+            "fileTree": context.file_tree,
+            "discovery": context.discovery_metadata,
+            "writerModel": options.writer_model,
+            "interactive": options.interactive,
+            "stdout": options.stdout,
             "tokenAnalysis": _token_analysis_metadata(token_analysis),
             "chunkPlan": _chunk_plan_metadata(chunks),
             "semantic": _semantic_metadata(semantic_result),
@@ -465,6 +520,7 @@ def _run_multi_pass(state: ReviewState) -> ReviewState:
     chunks = state.get("review_chunks", [])
     review_context = ReviewContext.create(context.project_name, options.review_type, context.files)
     pass_results: list[PassResult] = []
+    pass_costs = []
     memory_context = _recall_memory_context(state)
     dependency_context = _prepare_dependency_context(state)
     client = create_llm_client(config)
@@ -505,6 +561,9 @@ def _run_multi_pass(state: ReviewState) -> ReviewState:
             )
             runtime.finish_model_stream()
             review_context.update_from_review(response.content, chunk_files)
+            cost_info = estimate_cost_from_usage(response.usage, response.model)
+            if cost_info is not None:
+                pass_costs.append(cost_info)
             pass_results.append(
                 PassResult(
                     pass_number=pass_number,
@@ -514,6 +573,9 @@ def _run_multi_pass(state: ReviewState) -> ReviewState:
                     metadata={
                         "usage": response.usage.model_dump(exclude_none=True),
                         "model": response.model,
+                        "cost": cost_info.to_metadata() if cost_info else None,
+                        "modelWarnings": response.metadata.get("modelWarnings", []),
+                        "resilience": response.metadata.get("resilience", {}),
                     },
                 )
             )
@@ -541,8 +603,15 @@ def _run_multi_pass(state: ReviewState) -> ReviewState:
             duration_ms=duration_ms,
         )
 
-    content = _format_multi_pass_report(options.review_type, pass_results)
+    content, consolidation_metadata, consolidation_cost = _consolidate_pass_results(
+        state,
+        pass_results,
+    )
     _learn_memory_from_content({**state, "pass_results": pass_results}, content)
+    all_costs = [*pass_costs]
+    if consolidation_cost is not None:
+        all_costs.append(consolidation_cost)
+    aggregate_cost = aggregate_costs(config.selected_model, all_costs)
     result = ReviewResult(
         content=content,
         file_path=options.target,
@@ -554,9 +623,20 @@ def _run_multi_pass(state: ReviewState) -> ReviewState:
             "projectName": context.project_name,
             "provider": config.provider,
             "model": config.selected_model,
-            "usage": {},
+            "usage": usage_from_cost(aggregate_cost),
+            "cost": aggregate_cost.to_metadata() if aggregate_cost else None,
             "fileCount": len(context.files),
             "docCount": len(context.docs),
+            "language": options.language,
+            "detectedLanguage": context.detection.language,
+            "framework": options.framework,
+            "detectedFramework": context.detection.framework,
+            "detection": context.detection.model_dump(),
+            "fileTree": context.file_tree,
+            "discovery": context.discovery_metadata,
+            "writerModel": options.writer_model,
+            "interactive": options.interactive,
+            "stdout": options.stdout,
             "strategy": state["enhanced_context"].metadata.get("strategy"),
             "context_enhancers": [
                 section.title for section in state["enhanced_context"].context_sections
@@ -567,6 +647,8 @@ def _run_multi_pass(state: ReviewState) -> ReviewState:
             "multiPass": {
                 "totalPasses": len(pass_results),
                 "passes": [item.model_dump() for item in pass_results],
+                "chunkFiles": [item.files for item in pass_results],
+                "consolidation": consolidation_metadata,
             },
             "toolCalling": _tool_metadata(dependency_context),
             "memory": {
@@ -587,6 +669,109 @@ def _run_multi_pass(state: ReviewState) -> ReviewState:
     }
 
 
+def _consolidate_pass_results(
+    state: ReviewState,
+    pass_results: list[PassResult],
+) -> tuple[str, dict[str, Any], CostInfo | None]:
+    """Create a final multi-pass report using a writer model when configured."""
+
+    options = state["options"]
+    config = state["config"]
+    context = state["context"]
+    successful = [item for item in pass_results if item.success and item.content.strip()]
+    fallback_content = _format_multi_pass_report(options.review_type, pass_results)
+    if not successful:
+        return (
+            fallback_content,
+            {"mode": "deterministic", "model": None, "reason": "no_successful_passes"},
+            None,
+        )
+
+    writer_model = options.writer_model
+    if not writer_model:
+        return (
+            fallback_content,
+            {"mode": "deterministic", "model": None, "reason": "writer_model_not_configured"},
+            None,
+        )
+
+    writer_config = config.model_copy(update={"selected_model": writer_model})
+    prompt = _build_consolidation_prompt(context.project_name, options.review_type, pass_results)
+    try:
+        response = create_llm_client(writer_config).generate_review(
+            prompt,
+            GenerationOptions(
+                metadata={
+                    "consolidation": True,
+                    "pass_count": len(pass_results),
+                    "chunk_files": [item.files for item in pass_results],
+                }
+            ),
+        )
+    except Exception as exc:
+        return (
+            fallback_content,
+            {
+                "mode": "deterministic",
+                "model": writer_model,
+                "reason": f"writer_failed: {exc}",
+            },
+            None,
+        )
+
+    content = response.content.strip()
+    if not content:
+        return (
+            fallback_content,
+            {"mode": "deterministic", "model": writer_model, "reason": "writer_returned_empty"},
+            None,
+        )
+    cost = estimate_cost_from_usage(response.usage, response.model)
+    return (
+        content,
+        {
+            "mode": "writer",
+            "model": response.model,
+            "usage": response.usage.model_dump(exclude_none=True),
+            "cost": cost.to_metadata() if cost else None,
+        },
+        cost,
+    )
+
+
+def _build_consolidation_prompt(
+    project_name: str,
+    review_type: str,
+    pass_results: list[PassResult],
+) -> str:
+    lines = [
+        "Consolidate the following multi-pass review results into one final report.",
+        "",
+        f"Project: {project_name}",
+        f"Review type: {review_type}",
+        f"Pass count: {len(pass_results)}",
+        "",
+        "Requirements:",
+        "- Deduplicate repeated findings.",
+        "- Preserve concrete file references.",
+        "- Keep failed-pass notes separate from successful findings.",
+        "- Return Markdown only.",
+        "",
+    ]
+    for item in pass_results:
+        status = "success" if item.success else f"failed: {item.error}"
+        lines.extend(
+            [
+                f"## Pass {item.pass_number} ({status})",
+                f"Files: {', '.join(item.files) or 'none'}",
+                "",
+                item.content,
+                "",
+            ]
+        )
+    return "\n".join(lines)
+
+
 def _recall_memory_context(state: ReviewState) -> str:
     options = state["options"]
     if not options.use_memory:
@@ -594,7 +779,12 @@ def _recall_memory_context(state: ReviewState) -> str:
     config = state["config"]
     context = state["context"]
     store = FileMemoryStore(config.project_root / ".ai-code-review" / "memory.jsonl")
-    entries = store.recall(f"{context.project_name} {options.review_type}", limit=5)
+    entries = store.recall(
+        f"{context.project_name} {options.review_type}",
+        limit=5,
+        project_root=str(config.project_root),
+        review_type=options.review_type,
+    )
     if not entries:
         return "No prior memory entries matched this project and review type."
     return "\n".join(f"- [{entry.category}] {entry.content}" for entry in entries)
@@ -614,6 +804,13 @@ def _learn_memory_from_content(state: ReviewState, content: str) -> None:
         MemoryEntry(
             category=options.review_type,
             content=summary,
+            project_root=str(config.project_root),
+            review_type=options.review_type,
+            finding_metadata={
+                "project": context.project_name,
+                "file_count": len(context.files),
+                "model": state.get("response").model if state.get("response") else None,
+            },
             metadata={
                 "project": context.project_name,
                 "review_type": options.review_type,
@@ -638,10 +835,10 @@ def _dependency_context_for_prompt(
     options: ReviewOptions,
     dependency_context: DependencyToolContext,
 ) -> str:
-    should_include = (
-        options.include_dependency_analysis is True
-        and options.review_type in {"architectural", "security"}
-    )
+    should_include = options.include_dependency_analysis is True and options.review_type in {
+        "architectural",
+        "security",
+    }
     if not should_include:
         return ""
     lines = [dependency_context.static_context]
@@ -667,6 +864,14 @@ def _execute_langchain_tool_call(call: Any) -> str:
     return result.result
 
 
+def _ensure_response_cost_metadata(response: LLMResponse) -> None:
+    if "cost" in response.metadata:
+        return
+    cost_info = estimate_cost_from_usage(response.usage, response.model)
+    if cost_info is not None:
+        response.metadata["cost"] = cost_info.to_metadata()
+
+
 def _files_for_chunk(files: list[DiscoveredFile], chunk: ReviewChunk) -> list[DiscoveredFile]:
     by_path = {file.relative_path: file for file in files}
     if chunk.review_units:
@@ -676,7 +881,9 @@ def _files_for_chunk(files: list[DiscoveredFile], chunk: ReviewChunk) -> list[Di
                 original = by_path.get(relative_path)
                 if not original:
                     continue
-                line_range = unit.metadata.get("lineRange") if isinstance(unit.metadata, dict) else None
+                line_range = (
+                    unit.metadata.get("lineRange") if isinstance(unit.metadata, dict) else None
+                )
                 suffix = ""
                 if isinstance(line_range, list) and len(line_range) == 2:
                     suffix = f":{line_range[0]}-{line_range[1]}"
@@ -777,6 +984,8 @@ def _memory_metadata(state: ReviewState) -> dict[str, Any]:
     return {
         "enabled": options.use_memory,
         "contextInjected": bool(state.get("memory_context")),
+        "reviewType": options.review_type,
+        "projectRoot": str(config.project_root) if options.use_memory else None,
         "path": str(config.project_root / ".ai-code-review" / "memory.jsonl")
         if options.use_memory
         else None,
@@ -852,5 +1061,7 @@ def _format_multi_pass_report(review_type: str, pass_results: list[PassResult]) 
             lines.append(line)
         lines.append("")
     if any(not item.success for item in pass_results):
-        lines.append("Some passes failed; available findings were consolidated from successful passes.")
+        lines.append(
+            "Some passes failed; available findings were consolidated from successful passes."
+        )
     return "\n".join(lines).strip()

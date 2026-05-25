@@ -1,15 +1,39 @@
 from .base import (
+    SUPPORTED_EXTENSIONS,
+    SKIPPED_DIRS,
+    DOC_NAMES,
+    MAX_DOC_CHARS,
+    FRAMEWORK_SIGNATURES,
+    CSS_FRAMEWORK_SIGNATURES,
     DiscoveredFile,
     ProjectContext,
+    ProjectDetection,
+    CssFrameworkDetection,
+    DiscoveryResult,
     discover_project_context,
     discover_files,
-    read_project_docs
+    discover_files_with_metadata,
+    detect_project,
+    read_project_docs,
+    generate_file_tree
 )
 
 __all__ = [
+    "SUPPORTED_EXTENSIONS",
+    "SKIPPED_DIRS",
+    "DOC_NAMES",
+    "MAX_DOC_CHARS",
+    "FRAMEWORK_SIGNATURES",
+    "CSS_FRAMEWORK_SIGNATURES",
     "DiscoveredFile",
     "ProjectContext",
+    "ProjectDetection",
+    "CssFrameworkDetection",
+    "DiscoveryResult",
     "discover_project_context",
     "discover_files",
-    "read_project_docs"
+    "discover_files_with_metadata",
+    "detect_project",
+    "read_project_docs",
+    "generate_file_tree"
 ]

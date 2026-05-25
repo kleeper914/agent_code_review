@@ -60,7 +60,7 @@ class Observability:
         *,
         enabled: bool = False,
         endpoint: str | None = None,
-        service_name: str = "aicode-review-python",
+        service_name: str = "agent-code-review",
         console: bool = False,
     ) -> None:
         self.enabled = enabled
@@ -122,7 +122,7 @@ def configure_observability(
     *,
     enabled: bool,
     endpoint: str | None = None,
-    service_name: str = "aicode-review-python",
+    service_name: str = "agent-code-review",
     console: bool = False,
 ) -> Observability:
     global _OBSERVABILITY

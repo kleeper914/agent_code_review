@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from ..discovery import DiscoveredFile
-from ..llm_clients.registry import MODEL_REGISTRY
+from ..llm_clients.registry import resolve_model_info
 
 from .chunking import ReviewChunk, pack_file_analyses
 
@@ -192,7 +192,7 @@ def count_tokens(text: str, model_name: str) -> int:
         try:
             import tiktoken
 
-            encoding = tiktoken.encoding_for_model("gpt-4o")
+            encoding = tiktoken.encoding_for_model("gpt-5.4")
             return len(encoding.encode(text))
         except Exception:
             return _approximate_token_count(text, ratio=4)
@@ -204,33 +204,8 @@ def count_tokens(text: str, model_name: str) -> int:
 
 
 def context_window_for_model(model_name: str) -> int:
-    for model in MODEL_REGISTRY:
-        if model.key == model_name:
-            return model.context_window
-
-    base_name = model_name.split(":", 1)[1] if ":" in model_name else model_name
-    lower = base_name.lower()
-    if "gemini-3" in lower:
-        return 1_048_576
-    if "claude-opus-4-7" in lower or "claude-sonnet-4-6" in lower:
-        return 1_000_000
-    if "claude-haiku-4-5-20251001" in lower:
-        return 200_000
-    if "gpt-5.5" in lower or "gpt-5.4" in lower:
-        return 1_000_000
-    if "gpt-5.4-mini" in lower:
-        return 400_000
-    if "deepseek" in lower:
-        return 1_000_000
-    if "grok" in lower:
-        return 1_000_000
-    if "qwen3.6-plus" in lower or "qwen3.6-flash" in lower:
-        return 1_000_000
-    if "qwen3.6-max-preview" in lower:
-        return 262_144
-    if "mistral" in lower:
-        return 256_000
-    return DEFAULT_CONTEXT_WINDOW
+    resolution = resolve_model_info(model_name)
+    return resolution.info.context_window or DEFAULT_CONTEXT_WINDOW
 
 
 def model_family(model_name: str) -> Literal["openai", "anthropic", "gemini", "openrouter", "deepseek", "unknown"]:

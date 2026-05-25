@@ -19,6 +19,8 @@ class TokenUsage(BaseModel):
 class GenerationOptions(BaseModel):
     """Optional generation controls shared by provider adapters."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     temperature: float | None = None
     max_tokens: int | None = None
     on_chunk: Callable[[str], None] | None = None
@@ -29,10 +31,11 @@ class GenerationOptions(BaseModel):
 
 class LLMResponse(BaseModel):
     """Provider-neutral response returned to orchestration and strategies."""
-    
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     content: str
     usage: TokenUsage = Field(default_factory=TokenUsage)
     raw: Any = None
     model: str
+    metadata: dict[str, Any] = Field(default_factory=dict)

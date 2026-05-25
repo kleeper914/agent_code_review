@@ -12,6 +12,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import ResolvedConfig
+from ..observability import get_observability
 from ..runtime import RuntimeContext
 
 from .orchestrator import run_review as run_orchestrated_review
@@ -24,9 +25,7 @@ ANALYSIS_REVIEW_TYPE_MAP = {
     "syntax": "quick-fixes",
     "security": "security",
     "performance": "performance",
-    # 原 TypeScript 项目将 patterns 映射到 extract-patterns；Python MVP 尚未迁移该
-    # strategy，因此先走 architectural，让模型从结构和模式角度审查单文件。
-    "patterns": "architectural",
+    "patterns": "extract-patterns",
 }
 
 
@@ -50,7 +49,11 @@ class ReviewService:
         config: ResolvedConfig | None = None,
         runtime: RuntimeContext | None = None,
     ) -> ReviewResult:
-        return run_orchestrated_review(options, config, runtime)
+        with get_observability().start_span(
+            "service.run_review",
+            {"review_type": options.review_type, "target": options.target},
+        ):
+            return run_orchestrated_review(options, config, runtime)
 
     def run_file_analysis(
         self,
@@ -63,6 +66,33 @@ class ReviewService:
         framework: str | None = None,
         include_project_docs: bool = True,
         options: dict[str, Any] | None = None,
+    ) -> ReviewResult | ServiceAnalysisResult:
+        with get_observability().start_span(
+            "service.run_file_analysis",
+            {"analysis_type": analysis_type, "file_path": file_path},
+        ):
+            return self._run_file_analysis_inner(
+                file_path=file_path,
+                analysis_type=analysis_type,
+                output_format=output_format,
+                model=model,
+                language=language,
+                framework=framework,
+                include_project_docs=include_project_docs,
+                options=options,
+            )
+
+    def _run_file_analysis_inner(
+        self,
+        *,
+        file_path: str,
+        analysis_type: FileAnalysisType,
+        output_format: str,
+        model: str | None,
+        language: str | None,
+        framework: str | None,
+        include_project_docs: bool,
+        options: dict[str, Any] | None,
     ) -> ReviewResult | ServiceAnalysisResult:
         resolved_path = Path(file_path).expanduser().resolve()
         if not resolved_path.exists():
@@ -102,6 +132,29 @@ class ReviewService:
         branch: str | None = None,
         since: str | None = None,
         until: str | None = None,
+    ) -> ServiceAnalysisResult:
+        with get_observability().start_span(
+            "service.run_git_analysis",
+            {"analysis_type": analysis_type, "repository": repository},
+        ):
+            return self._run_git_analysis_inner(
+                repository=repository,
+                analysis_type=analysis_type,
+                commit_count=commit_count,
+                branch=branch,
+                since=since,
+                until=until,
+            )
+
+    def _run_git_analysis_inner(
+        self,
+        *,
+        repository: str,
+        analysis_type: GitAnalysisType,
+        commit_count: int,
+        branch: str | None,
+        since: str | None,
+        until: str | None,
     ) -> ServiceAnalysisResult:
         repo_path = Path(repository).expanduser().resolve()
         if not repo_path.exists() or not repo_path.is_dir():
