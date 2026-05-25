@@ -22,7 +22,7 @@ def create_openrouter_adapter(
 
     chat_model = ChatOpenAI(
         model=model_name,
-        api_key=api_key,
+        api_key=api_key,  # type: ignore[arg-type]
         base_url=OPENROUTER_BASE_URL,
         streaming=streaming,
     )

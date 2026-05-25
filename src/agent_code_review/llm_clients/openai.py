@@ -17,7 +17,7 @@ def create_openai_adapter(
 ) -> BaseLangChainAdapter:
     from langchain_openai import ChatOpenAI
 
-    chat_model = ChatOpenAI(model=model_name, api_key=api_key, streaming=streaming)
+    chat_model = ChatOpenAI(model=model_name, api_key=api_key, streaming=streaming)  # type: ignore[arg-type]
     return BaseLangChainAdapter(
         provider="openai",
         model_name=model_name,

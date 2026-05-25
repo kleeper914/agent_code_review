@@ -139,7 +139,9 @@ def discover_project_context(
     )
 
 
-def discover_files(*, target: str, project_root: Path, include_tests: bool = False) -> list[DiscoveredFile]:
+def discover_files(
+    *, target: str, project_root: Path, include_tests: bool = False
+) -> list[DiscoveredFile]:
     return discover_files_with_metadata(
         target=target,
         project_root=project_root,
@@ -169,7 +171,11 @@ def discover_files_with_metadata(
     gitignore = _load_gitignore(root)
     eslintignore = _load_ignore_file(root / ".eslintignore")
     tsconfig = _load_tsconfig(root)
-    paths = [target_path] if target_path.is_file() else _walk_supported_files(target_path, root, gitignore)
+    paths = (
+        [target_path]
+        if target_path.is_file()
+        else _walk_supported_files(target_path, root, gitignore)
+    )
 
     discovered: list[DiscoveredFile] = []
     excluded_files: list[str] = []
@@ -223,7 +229,9 @@ def detect_project(project_root: Path) -> ProjectDetection:
     language_counts = _count_languages(root)
     dependencies = _dependency_map(root)
     language = _detect_primary_language(root, language_counts, dependencies)
-    framework_scores, framework_methods, framework_types = _score_frameworks(root, language, dependencies)
+    framework_scores, framework_methods, framework_types = _score_frameworks(
+        root, language, dependencies
+    )
     css_frameworks = _detect_css_frameworks(root, dependencies)
 
     framework = "none"
@@ -236,11 +244,15 @@ def detect_project(project_root: Path) -> ProjectDetection:
         framework, score = max(framework_scores.items(), key=lambda item: item[1])
         if score > 0:
             confidence = min(score, 1.0)
-            detection_method = ", ".join(framework_methods.get(framework, [])) or "framework-signature"
+            detection_method = (
+                ", ".join(framework_methods.get(framework, [])) or "framework-signature"
+            )
             framework_version = dependencies.get(_primary_dependency_for_framework(framework))
             framework_type = framework_types.get(framework)
             additional = sorted(
-                name for name, value in framework_scores.items() if name != framework and value > 0.5
+                name
+                for name, value in framework_scores.items()
+                if name != framework and value > 0.5
             )
         else:
             framework = "none"
@@ -365,7 +377,9 @@ def _glob_matches(relative_path: str, pattern: str) -> bool:
     return re.match(f"^{regex}$", normalized) is not None
 
 
-def _walk_supported_files(target_path: Path, project_root: Path, gitignore: pathspec.PathSpec) -> list[Path]:
+def _walk_supported_files(
+    target_path: Path, project_root: Path, gitignore: pathspec.PathSpec
+) -> list[Path]:
     files: list[Path] = []
     for child in target_path.iterdir():
         relative = child.relative_to(project_root).as_posix()
@@ -474,7 +488,9 @@ def _count_languages(project_root: Path) -> dict[str, int]:
     return dict(counts)
 
 
-def _walk_all_files(target_path: Path, project_root: Path, gitignore: pathspec.PathSpec) -> list[Path]:
+def _walk_all_files(
+    target_path: Path, project_root: Path, gitignore: pathspec.PathSpec
+) -> list[Path]:
     files: list[Path] = []
     if not target_path.exists():
         return files
@@ -593,16 +609,26 @@ def _detect_primary_language(
 ) -> str:
     if language_counts.get("dart") or (project_root / "pubspec.yaml").exists():
         return "dart"
-    if language_counts.get("python", 0) > 0 and any(dep in dependencies for dep in ("django", "flask", "fastapi")):
+    if language_counts.get("python", 0) > 0 and any(
+        dep in dependencies for dep in ("django", "flask", "fastapi")
+    ):
         return "python"
     if language_counts.get("php", 0) > 0 or (project_root / "composer.json").exists():
         return "php"
     if language_counts.get("ruby", 0) > 0 or (project_root / "Gemfile").exists():
         return "ruby"
-    if (project_root / "tsconfig.json").exists() or "typescript" in dependencies or language_counts.get("typescript", 0):
+    if (
+        (project_root / "tsconfig.json").exists()
+        or "typescript" in dependencies
+        or language_counts.get("typescript", 0)
+    ):
         return "typescript"
     if (project_root / "package.json").exists():
-        return "typescript" if any(dep in dependencies for dep in ("next", "react", "vue")) else "javascript"
+        return (
+            "typescript"
+            if any(dep in dependencies for dep in ("next", "react", "vue"))
+            else "javascript"
+        )
     if language_counts:
         return max(language_counts.items(), key=lambda item: item[1])[0]
     return "unknown"
@@ -610,32 +636,128 @@ def _detect_primary_language(
 
 FRAMEWORK_SIGNATURES: dict[str, list[dict[str, Any]]] = {
     "typescript": [
-        {"name": "nextjs", "files": ["next.config.js", "next.config.mjs"], "dependencies": ["next"], "weight": 0.9, "type": "fullstack"},
-        {"name": "react", "files": ["src/App.tsx", "src/App.jsx"], "dependencies": ["react", "react-dom"], "weight": 0.8, "type": "ui"},
-        {"name": "vue", "files": ["src/App.vue", "vue.config.js"], "dependencies": ["vue"], "weight": 0.8, "type": "ui"},
-        {"name": "angular", "files": ["angular.json"], "dependencies": ["@angular/core"], "weight": 0.9, "type": "ui"},
+        {
+            "name": "nextjs",
+            "files": ["next.config.js", "next.config.mjs"],
+            "dependencies": ["next"],
+            "weight": 0.9,
+            "type": "fullstack",
+        },
+        {
+            "name": "react",
+            "files": ["src/App.tsx", "src/App.jsx"],
+            "dependencies": ["react", "react-dom"],
+            "weight": 0.8,
+            "type": "ui",
+        },
+        {
+            "name": "vue",
+            "files": ["src/App.vue", "vue.config.js"],
+            "dependencies": ["vue"],
+            "weight": 0.8,
+            "type": "ui",
+        },
+        {
+            "name": "angular",
+            "files": ["angular.json"],
+            "dependencies": ["@angular/core"],
+            "weight": 0.9,
+            "type": "ui",
+        },
     ],
     "javascript": [
-        {"name": "nextjs", "files": ["next.config.js", "next.config.mjs"], "dependencies": ["next"], "weight": 0.9, "type": "fullstack"},
-        {"name": "react", "files": ["src/App.jsx"], "dependencies": ["react", "react-dom"], "weight": 0.8, "type": "ui"},
-        {"name": "vue", "files": ["src/App.vue", "vue.config.js"], "dependencies": ["vue"], "weight": 0.8, "type": "ui"},
-        {"name": "express", "files": ["app.js", "server.js"], "dependencies": ["express"], "weight": 0.7, "type": "backend"},
+        {
+            "name": "nextjs",
+            "files": ["next.config.js", "next.config.mjs"],
+            "dependencies": ["next"],
+            "weight": 0.9,
+            "type": "fullstack",
+        },
+        {
+            "name": "react",
+            "files": ["src/App.jsx"],
+            "dependencies": ["react", "react-dom"],
+            "weight": 0.8,
+            "type": "ui",
+        },
+        {
+            "name": "vue",
+            "files": ["src/App.vue", "vue.config.js"],
+            "dependencies": ["vue"],
+            "weight": 0.8,
+            "type": "ui",
+        },
+        {
+            "name": "express",
+            "files": ["app.js", "server.js"],
+            "dependencies": ["express"],
+            "weight": 0.7,
+            "type": "backend",
+        },
     ],
     "python": [
-        {"name": "django", "files": ["manage.py"], "dependencies": ["django"], "weight": 0.9, "type": "fullstack"},
-        {"name": "fastapi", "files": ["main.py"], "dependencies": ["fastapi"], "weight": 0.8, "type": "backend"},
-        {"name": "flask", "files": ["app.py", "wsgi.py"], "dependencies": ["flask"], "weight": 0.8, "type": "backend"},
+        {
+            "name": "django",
+            "files": ["manage.py"],
+            "dependencies": ["django"],
+            "weight": 0.9,
+            "type": "fullstack",
+        },
+        {
+            "name": "fastapi",
+            "files": ["main.py"],
+            "dependencies": ["fastapi"],
+            "weight": 0.8,
+            "type": "backend",
+        },
+        {
+            "name": "flask",
+            "files": ["app.py", "wsgi.py"],
+            "dependencies": ["flask"],
+            "weight": 0.8,
+            "type": "backend",
+        },
     ],
     "dart": [
-        {"name": "flutter", "files": ["pubspec.yaml", "lib/main.dart"], "dependencies": ["flutter"], "weight": 0.9, "type": "ui"},
+        {
+            "name": "flutter",
+            "files": ["pubspec.yaml", "lib/main.dart"],
+            "dependencies": ["flutter"],
+            "weight": 0.9,
+            "type": "ui",
+        },
     ],
     "php": [
-        {"name": "laravel", "files": ["artisan"], "dependencies": ["laravel/framework"], "weight": 0.9, "type": "fullstack"},
-        {"name": "symfony", "files": ["symfony.lock"], "dependencies": ["symfony/framework-bundle"], "weight": 0.9, "type": "fullstack"},
+        {
+            "name": "laravel",
+            "files": ["artisan"],
+            "dependencies": ["laravel/framework"],
+            "weight": 0.9,
+            "type": "fullstack",
+        },
+        {
+            "name": "symfony",
+            "files": ["symfony.lock"],
+            "dependencies": ["symfony/framework-bundle"],
+            "weight": 0.9,
+            "type": "fullstack",
+        },
     ],
     "ruby": [
-        {"name": "rails", "files": ["config/routes.rb"], "dependencies": ["rails"], "weight": 0.9, "type": "fullstack"},
-        {"name": "sinatra", "files": ["config.ru"], "dependencies": ["sinatra"], "weight": 0.8, "type": "backend"},
+        {
+            "name": "rails",
+            "files": ["config/routes.rb"],
+            "dependencies": ["rails"],
+            "weight": 0.9,
+            "type": "fullstack",
+        },
+        {
+            "name": "sinatra",
+            "files": ["config.ru"],
+            "dependencies": ["sinatra"],
+            "weight": 0.8,
+            "type": "backend",
+        },
     ],
 }
 
@@ -671,15 +793,25 @@ def _score_frameworks(
     return scores, methods, framework_types
 
 
-CSS_FRAMEWORK_SIGNATURES = {
-    "tailwind": {"dependencies": ["tailwindcss"], "files": ["tailwind.config.js", "tailwind.config.ts"], "weight": 0.9},
+CSS_FRAMEWORK_SIGNATURES: dict[str, dict[str, Any]] = {
+    "tailwind": {
+        "dependencies": ["tailwindcss"],
+        "files": ["tailwind.config.js", "tailwind.config.ts"],
+        "weight": 0.9,
+    },
     "bootstrap": {"dependencies": ["bootstrap"], "files": ["bootstrap.min.css"], "weight": 0.8},
-    "material-ui": {"dependencies": ["@mui/material", "@material-ui/core"], "files": [], "weight": 0.8},
+    "material-ui": {
+        "dependencies": ["@mui/material", "@material-ui/core"],
+        "files": [],
+        "weight": 0.8,
+    },
     "styled-components": {"dependencies": ["styled-components"], "files": [], "weight": 0.7},
 }
 
 
-def _detect_css_frameworks(project_root: Path, dependencies: dict[str, str]) -> list[CssFrameworkDetection]:
+def _detect_css_frameworks(
+    project_root: Path, dependencies: dict[str, str]
+) -> list[CssFrameworkDetection]:
     detected: list[CssFrameworkDetection] = []
     for name, signature in CSS_FRAMEWORK_SIGNATURES.items():
         score = 0.0
@@ -692,7 +824,9 @@ def _detect_css_frameworks(project_root: Path, dependencies: dict[str, str]) -> 
             if (project_root / file_name).exists():
                 score += float(signature["weight"])
         if score > 0:
-            detected.append(CssFrameworkDetection(name=name, version=version, confidence=min(score, 1.0)))
+            detected.append(
+                CssFrameworkDetection(name=name, version=version, confidence=min(score, 1.0))
+            )
     return sorted(detected, key=lambda item: (-item.confidence, item.name))
 
 

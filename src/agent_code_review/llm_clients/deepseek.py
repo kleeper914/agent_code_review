@@ -22,7 +22,7 @@ def create_deepseek_adapter(
 
     chat_model = ChatDeepSeek(
         model=model_name,
-        api_key=api_key,
+        api_key=api_key,  # type: ignore[arg-type]
         api_base=DEEPSEEK_BASE_URL,
         streaming=streaming,
     )

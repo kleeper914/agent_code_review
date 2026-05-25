@@ -8,6 +8,7 @@ import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -134,7 +135,8 @@ def _run_review_or_models(argv: list[str]) -> int:
         execution_timeout=namespace.execution_timeout,
         enable_ai_detection=namespace.enable_ai_detection,
         ai_detection_threshold=namespace.ai_detection_threshold,
-        ai_detection_analyzers=_split_csv(namespace.ai_detection_analyzers) or [
+        ai_detection_analyzers=_split_csv(namespace.ai_detection_analyzers)
+        or [
             "git",
             "documentation",
         ],
@@ -232,7 +234,11 @@ def _run_plugins(argv: list[str]) -> int:
     namespace = parser.parse_args(argv)
     if namespace.plugins_command != "list":
         parser.error("plugins requires a subcommand")
-    from ..plugins import create_default_registry, load_plugins_from_directory, plugin_to_row
+    from ..plugins import (
+        create_default_registry,
+        load_plugins_from_directory,
+        plugin_to_row,
+    )
 
     registry = create_default_registry()
     load_plugins_from_directory(namespace.plugins_dir, registry)
@@ -263,18 +269,20 @@ def _run_prompt_feedback(argv: list[str]) -> int:
         print(f"Stored feedback for {namespace.review_type}")
         return 0
     if command == "list":
-        for entry in store.list(namespace.review_type):
-            print(f"{entry.rating}/5\t{entry.review_type}\t{entry.prompt}")
+        for feedback_entry in store.list(namespace.review_type):
+            print(
+                f"{feedback_entry.rating}/5\t{feedback_entry.review_type}\t{feedback_entry.prompt}"
+            )
         return 0
     if command == "best":
-        entry = store.best(namespace.review_type)
-        if entry is None:
+        best_entry = store.best(namespace.review_type)
+        if best_entry is None:
             print(f"No feedback found for {namespace.review_type}")
             return 1
         if namespace.as_json:
-            print(json.dumps(entry.model_dump(mode="json"), ensure_ascii=False))
+            print(json.dumps(best_entry.model_dump(mode="json"), ensure_ascii=False))
         else:
-            print(f"{entry.rating}/5\t{entry.review_type}\t{entry.prompt}")
+            print(f"{best_entry.rating}/5\t{best_entry.review_type}\t{best_entry.prompt}")
         return 0
     if command == "optimize":
         config = resolve_config(
@@ -311,7 +319,9 @@ def _run_generate_config(argv: list[str]) -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = _sample_config_payload()
     if namespace.format == "json":
-        output_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        output_path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
     else:
         output_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     print(f"Sample {namespace.format.upper()} configuration file created at: {output_path}")
@@ -346,7 +356,9 @@ def _run_init(argv: list[str]) -> int:
         print(f"Configuration already exists at {config_path}")
         return 0
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(yaml.safe_dump(_sample_config_payload(), sort_keys=False), encoding="utf-8")
+    config_path.write_text(
+        yaml.safe_dump(_sample_config_payload(), sort_keys=False), encoding="utf-8"
+    )
     print(f"Project configuration initialized at {config_path}")
     return 0
 
@@ -358,7 +370,7 @@ def _run_install(argv: list[str]) -> int:
     if output_path.exists() and not namespace.force:
         print(f"Project MCP config already exists at {output_path}")
         return 0
-    payload = {
+    payload: dict[str, Any] = {
         "mcpServers": {
             "ai-code-review": {
                 "command": "ai-code-review",
@@ -377,21 +389,23 @@ def _run_test_build(argv: list[str]) -> int:
     namespace = parser.parse_args(argv)
     from ..strategies import supported_review_types
 
+    review_types = list(supported_review_types())
+    models = list(list_supported_models())
     payload = {
         "summary": {
-            "supportedReviewTypes": len(supported_review_types()),
-            "registeredModels": len(list_supported_models()),
+            "supportedReviewTypes": len(review_types),
+            "registeredModels": len(models),
             "remoteModelTests": "deferred-to-phase-9",
         },
-        "reviewTypes": list(supported_review_types()),
-        "models": [model.key for model in list_supported_models()],
+        "reviewTypes": review_types,
+        "models": [model.key for model in models],
     }
     if namespace.json:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
     else:
         print("Local Phase 7 build compatibility check passed")
-        print(f"Supported review types: {payload['summary']['supportedReviewTypes']}")
-        print(f"Registered models: {payload['summary']['registeredModels']}")
+        print(f"Supported review types: {len(review_types)}")
+        print(f"Registered models: {len(models)}")
         print("Remote model matrix testing is deferred to Phase 9.")
     return 0
 
@@ -468,7 +482,7 @@ def test_model_connection(config: ResolvedConfig) -> str:
 
 
 def _review_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="agent-code-review")
+    parser = argparse.ArgumentParser(prog="aicode-review")
     parser.add_argument("target", nargs="?", default=".")
     parser.add_argument(
         "--type",
@@ -637,7 +651,9 @@ def _prompt_feedback_parser() -> argparse.ArgumentParser:
     optimize_parser.add_argument("--review-result", required=True)
     optimize_parser.add_argument("--model")
     optimize_parser.add_argument("--debug", action="store_true")
-    optimize_parser.add_argument("--log-level", choices=["debug", "info", "warning", "error", "none"])
+    optimize_parser.add_argument(
+        "--log-level", choices=["debug", "info", "warning", "error", "none"]
+    )
     _add_api_key_options(optimize_parser)
 
     return parser
@@ -752,11 +768,11 @@ def _resolve_config_for_validation(config_path: str | None) -> ResolvedConfig:
 
     path = Path(config_path).expanduser().resolve()
     data = _load_config_file(path)
-    api = data.get("api") if isinstance(data.get("api"), dict) else {}
-    keys = api.get("keys") if isinstance(api.get("keys"), dict) else {}
-    output = data.get("output") if isinstance(data.get("output"), dict) else {}
-    behavior = data.get("behavior") if isinstance(data.get("behavior"), dict) else {}
-    preferences = data.get("preferences") if isinstance(data.get("preferences"), dict) else {}
+    api = _mapping(data.get("api"))
+    keys = _mapping(api.get("keys"))
+    output = _mapping(data.get("output"))
+    behavior = _mapping(data.get("behavior"))
+    preferences = _mapping(data.get("preferences"))
 
     return ResolvedConfig(
         selected_model=str(api.get("model") or data.get("model") or "gemini:gemini-2.5-pro"),
@@ -767,7 +783,9 @@ def _resolve_config_for_validation(config_path: str | None) -> ResolvedConfig:
             openai=_placeholder_to_none(keys.get("openai")),
             deepseek=_placeholder_to_none(keys.get("deepseek")),
         ),
-        output_dir=_validation_output_dir(path.parent, output.get("directory") or output.get("dir")),
+        output_dir=_validation_output_dir(
+            path.parent, output.get("directory") or output.get("dir")
+        ),
         output_format=str(output.get("format") or "markdown"),
         debug=False,
         log_level=str(behavior.get("log_level") or "info"),
@@ -776,7 +794,7 @@ def _resolve_config_for_validation(config_path: str | None) -> ResolvedConfig:
     )
 
 
-def _load_config_file(path: Path) -> dict[str, object]:
+def _load_config_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Configuration file not found: {path}")
     text = path.read_text(encoding="utf-8")
@@ -787,6 +805,10 @@ def _load_config_file(path: Path) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise ValueError(f"Configuration file must contain an object: {path}")
     return payload
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _placeholder_to_none(value: object) -> str | None:

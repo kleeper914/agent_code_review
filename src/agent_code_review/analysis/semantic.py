@@ -191,7 +191,11 @@ def _python_declaration(node: ast.AST, lines: list[str]) -> Declaration:
             if isinstance(child, ast.Name) and child.id != name
         }
     )[:20]
-    doc = ast.get_docstring(node)
+    doc = (
+        ast.get_docstring(node)
+        if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef | ast.ClassDef | ast.Module)
+        else None
+    )
     return Declaration(
         type=node_type,
         name=name,

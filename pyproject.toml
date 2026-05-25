@@ -5,37 +5,34 @@ build-backend = "hatchling.build"
 [project]
 name = "agent-code-review"
 version = "0.1.0"
-description = "Agent-based code review assistant built with Python, automating intelligent code analysis and review tasks."
+description = "agent code review"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "typer>=0.12",
-    "pydantic>=2.7",
-    "pydantic-settings>=2.3",
-    "python-dotenv>=1.0",
-    "pyyaml>=6.0",
-    "pathspec>=0.12",
-    "rich>=13.7",
-    "langchain>=0.2",
-    "langgraph>=0.2",
-    "langchain-openai>=0.1",
-    "langchain-anthropic>=0.1",
-    "langchain-google-genai>=1.0",
-    "langchain-deepseek>=0.1",
-    "mcp>=1.27.1",
-    "opentelemetry-api>=1.42.1",
-    "opentelemetry-sdk>=1.42.1",
-    "opentelemetry-exporter-otlp>=1.42.1",
-    "tree-sitter-python>=0.25.0",
-    "tree-sitter>=0.25.2",
-    "tree-sitter-typescript>=0.23.2",
-    "tree-sitter-ruby>=0.23.1",
-    "tree-sitter-php>=0.24.1",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  "python-dotenv>=1.0",
+  "pyyaml>=6.0",
+  "pathspec>=0.12",
+  "rich>=13.7",
+  "langchain>=0.2",
+  "langgraph>=0.2",
+  "langchain-openai>=0.1",
+  "langchain-anthropic>=0.1",
+  "langchain-google-genai>=1.0",
+  "langchain-deepseek>=0.1",
+  "mcp[cli]>=1.27.1",
+  "opentelemetry-api>=1.25",
+  "opentelemetry-sdk>=1.25",
+  "opentelemetry-exporter-otlp>=1.25",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
-    "pytest>=8.2",
+  "pytest>=8.2",
+  "ruff>=0.15.0",
+  "mypy>=1.10",
+  "hatchling>=1.25",
 ]
 
 [project.scripts]
@@ -52,3 +49,10 @@ packages = ["src/agent_code_review"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src", "tests"]
+ignore_missing_imports = true
+warn_unused_ignores = false
+check_untyped_defs = false

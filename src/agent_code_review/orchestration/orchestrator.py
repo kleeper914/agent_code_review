@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 from ..analysis import ReviewContext, SemanticChunkingResult
 from ..analysis.chunking import ReviewChunk
@@ -162,7 +162,7 @@ def _run_langgraph_workflow(state: ReviewState) -> ReviewState:
         workflow.add_edge("result", END)
         workflow.add_edge("estimate_result", END)
         workflow.add_edge("multi_pass", END)
-        return workflow.compile().invoke(state)
+        return cast(ReviewState, workflow.compile().invoke(state))
     except Exception as exc:
         if exc.__class__.__name__ not in {"ImportError", "ModuleNotFoundError"}:
             raise
@@ -800,6 +800,7 @@ def _learn_memory_from_content(state: ReviewState, content: str) -> None:
     summary = content.strip()
     if len(summary) > 2_000:
         summary = f"{summary[:1997]}..."
+    response = state.get("response")
     store.learn(
         MemoryEntry(
             category=options.review_type,
@@ -809,7 +810,7 @@ def _learn_memory_from_content(state: ReviewState, content: str) -> None:
             finding_metadata={
                 "project": context.project_name,
                 "file_count": len(context.files),
-                "model": state.get("response").model if state.get("response") else None,
+                "model": response.model if isinstance(response, LLMResponse) else None,
             },
             metadata={
                 "project": context.project_name,

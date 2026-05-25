@@ -17,7 +17,7 @@ def create_anthropic_adapter(
 ) -> BaseLangChainAdapter:
     from langchain_anthropic import ChatAnthropic
 
-    chat_model = ChatAnthropic(model=model_name, api_key=api_key, streaming=streaming)
+    chat_model = ChatAnthropic(model=model_name, api_key=api_key, streaming=streaming)  # type: ignore[call-arg,arg-type]
     return BaseLangChainAdapter(
         provider="anthropic",
         model_name=model_name,

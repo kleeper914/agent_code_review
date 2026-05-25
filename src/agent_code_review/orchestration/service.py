@@ -298,7 +298,7 @@ class ReviewService:
         return "\n".join(lines)
 
     def _format_pattern_analysis(self, commits: list[dict[str, str]]) -> str:
-        prefixes = Counter()
+        prefixes: Counter[str] = Counter()
         for commit in commits:
             match = re.match(r"([a-zA-Z]+)(?:\(.+\))?:", commit["message"])
             prefixes[match.group(1).lower() if match else "unclassified"] += 1

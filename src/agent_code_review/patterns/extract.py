@@ -141,9 +141,9 @@ class ExtractPatternsValidator:
             payload = _parse_payload(output)
         except ValueError as exc:
             return ValidationResult(
-                is_valid=False,
-                quality_level="poor",
-                quality_metrics=_default_metrics(),
+                isValid=False,
+                qualityLevel="poor",
+                qualityMetrics=_default_metrics(),
                 issues=[
                     ValidationIssue(
                         field="root",
@@ -159,9 +159,9 @@ class ExtractPatternsValidator:
             root = ExtractPatternsRoot.model_validate(payload)
         except ValidationError as exc:
             return ValidationResult(
-                is_valid=False,
-                quality_level="poor",
-                quality_metrics=_default_metrics(),
+                isValid=False,
+                qualityLevel="poor",
+                qualityMetrics=_default_metrics(),
                 issues=[
                     ValidationIssue(
                         field=".".join(str(part) for part in issue["loc"]) or "root",
@@ -179,16 +179,16 @@ class ExtractPatternsValidator:
         metrics = _quality_metrics(root.patterns, content_issues)
         level = _quality_level(metrics.overall)
         return ValidationResult(
-            is_valid=True,
-            quality_level=level,
-            quality_metrics=metrics,
+            isValid=True,
+            qualityLevel=level,
+            qualityMetrics=metrics,
             issues=content_issues,
             suggestions=_suggestions(root.patterns, content_issues),
             summary=(
                 f"{level.title()} quality pattern extraction. "
                 f"Overall score: {metrics.overall}/100 with {len(content_issues)} validation issues."
             ),
-            pattern_count=len(root.patterns.architectural_patterns),
+            patternCount=len(root.patterns.architectural_patterns),
         )
 
 

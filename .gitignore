@@ -19,5 +19,5 @@ codex/*
 
 # test generate files
 ai-code-review-docs/*
-.ai-code-review
+.ai-code-review/*
 *.yaml

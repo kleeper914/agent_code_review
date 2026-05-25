@@ -61,8 +61,7 @@ class DetectionResult(BaseModel):
             "confidenceScore": self.confidence_score,
             "riskLevel": risk_level(self.confidence_score),
             "detectedPatterns": [
-                pattern.model_dump(mode="json", by_alias=True)
-                for pattern in self.detected_patterns
+                pattern.model_dump(mode="json", by_alias=True) for pattern in self.detected_patterns
             ],
             "analysisBreakdown": self.analysis_breakdown,
             "recommendations": self.recommendations,
@@ -168,7 +167,14 @@ class SubmissionConverter:
             return GitRepository(commits=[], root_path=str(project_root))
 
         log = subprocess.run(
-            ["git", "log", "--pretty=format:%H%x1f%s%x1f%ai%x1f%an%x1f%ae", "-n", "50", "--name-only"],
+            [
+                "git",
+                "log",
+                "--pretty=format:%H%x1f%s%x1f%ai%x1f%an%x1f%ae",
+                "-n",
+                "50",
+                "--name-only",
+            ],
             cwd=project_root,
             capture_output=True,
             text=True,
@@ -233,7 +239,11 @@ class GitAnalyzer(BaseAnalyzer):
         ai_messages = [
             commit
             for commit in commits
-            if re.search(r"\b(implement|add|create).*(comprehensive|complete|support|functionality)", commit.message, re.I)
+            if re.search(
+                r"\b(implement|add|create).*(comprehensive|complete|support|functionality)",
+                commit.message,
+                re.I,
+            )
             or re.match(r"^(feat|fix|docs|test|chore)(\(.+\))?: .{20,}", commit.message)
         ]
         if len(commits) >= 3 and len(ai_messages) / len(commits) >= 0.66:
@@ -260,7 +270,11 @@ class GitAnalyzer(BaseAnalyzer):
                     {"totalCommits": len(commits)},
                 )
             )
-        return {"analyzer": self.name, "patterns": patterns, "metadata": {"totalCommits": len(commits)}}
+        return {
+            "analyzer": self.name,
+            "patterns": patterns,
+            "metadata": {"totalCommits": len(commits)},
+        }
 
 
 class DocumentationAnalyzer(BaseAnalyzer):
@@ -306,7 +320,11 @@ class DocumentationAnalyzer(BaseAnalyzer):
                 )
             )
         generic_count = len(
-            re.findall(r"(this project provides|easy to use|comprehensive solution|powerful and flexible)", readme, re.I)
+            re.findall(
+                r"(this project provides|easy to use|comprehensive solution|powerful and flexible)",
+                readme,
+                re.I,
+            )
         )
         if generic_count >= 2:
             patterns.append(
@@ -322,7 +340,11 @@ class DocumentationAnalyzer(BaseAnalyzer):
         return {
             "analyzer": self.name,
             "patterns": patterns,
-            "metadata": {"filesAnalyzed": len(densities), "hasReadme": bool(readme), "avgCommentDensity": avg_density},
+            "metadata": {
+                "filesAnalyzed": len(densities),
+                "hasReadme": bool(readme),
+                "avgCommentDensity": avg_density,
+            },
         }
 
 
@@ -332,7 +354,9 @@ class StructuralAnalyzer(BaseAnalyzer):
     def analyze(self, submission: CodeSubmission) -> dict[str, Any]:
         files = submission.codebase.files
         line_counts = [len(file.content.splitlines()) for file in files]
-        function_names = re.findall(r"def\s+([a-zA-Z_][a-zA-Z0-9_]*)", "\n".join(file.content for file in files))
+        function_names = re.findall(
+            r"def\s+([a-zA-Z_][a-zA-Z0-9_]*)", "\n".join(file.content for file in files)
+        )
         patterns: list[DetectedPattern] = []
         if len(files) >= 4 and _uniformity(line_counts) > 0.85:
             patterns.append(
@@ -356,14 +380,20 @@ class StructuralAnalyzer(BaseAnalyzer):
                     {"functionNames": function_names[:10]},
                 )
             )
-        return {"analyzer": self.name, "patterns": patterns, "metadata": {"filesAnalyzed": len(files)}}
+        return {
+            "analyzer": self.name,
+            "patterns": patterns,
+            "metadata": {"filesAnalyzed": len(files)},
+        }
 
 
 class StatisticalAnalyzer(BaseAnalyzer):
     name = "statistical"
 
     def analyze(self, submission: CodeSubmission) -> dict[str, Any]:
-        tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", "\n".join(file.content for file in submission.codebase.files))
+        tokens = re.findall(
+            r"[A-Za-z_][A-Za-z0-9_]*", "\n".join(file.content for file in submission.codebase.files)
+        )
         unique = len(set(tokens))
         diversity = unique / len(tokens) if tokens else 1
         entropy = _entropy(tokens)
@@ -376,19 +406,37 @@ class StatisticalAnalyzer(BaseAnalyzer):
                     "medium",
                     min(0.82, 0.75 - diversity),
                     "Token distribution is repetitive across the submission.",
-                    {"totalTokens": len(tokens), "uniqueTokens": unique, "diversity": diversity, "entropy": entropy},
+                    {
+                        "totalTokens": len(tokens),
+                        "uniqueTokens": unique,
+                        "diversity": diversity,
+                        "entropy": entropy,
+                    },
                 )
             )
-        return {"analyzer": self.name, "patterns": patterns, "metadata": {"totalTokens": len(tokens), "uniqueTokens": unique, "entropy": entropy}}
+        return {
+            "analyzer": self.name,
+            "patterns": patterns,
+            "metadata": {"totalTokens": len(tokens), "uniqueTokens": unique, "entropy": entropy},
+        }
 
 
 class LinguisticAnalyzer(BaseAnalyzer):
     name = "linguistic"
 
     def analyze(self, submission: CodeSubmission) -> dict[str, Any]:
-        text = "\n".join([submission.documentation.readme or "", *[file.content for file in submission.codebase.files]])
+        text = "\n".join(
+            [
+                submission.documentation.readme or "",
+                *[file.content for file in submission.codebase.files],
+            ]
+        )
         patterns: list[DetectedPattern] = []
-        generic = re.findall(r"(process(?:es|ing)? the input data|comprehensive solution|easy to use|powerful and flexible)", text, re.I)
+        generic = re.findall(
+            r"(process(?:es|ing)? the input data|comprehensive solution|easy to use|powerful and flexible)",
+            text,
+            re.I,
+        )
         snake_names = re.findall(r"\b[a-z]+(?:_[a-z]+){2,}\b", text)
         if len(generic) >= 3 or len(snake_names) >= 4:
             patterns.append(
@@ -429,12 +477,12 @@ class DetectionEngine:
                     "ai_detection.analyzer",
                     {"analyzer": analyzer.name},
                 ):
-                    result = analyzer.analyze(submission)
+                    analyzer_result = analyzer.analyze(submission)
             except Exception as exc:  # pragma: no cover - defensive analyzer boundary
                 warnings.append(f"{analyzer.name} analyzer failed: {exc}")
                 continue
-            breakdown[analyzer.name] = result
-            patterns.extend(result.get("patterns") or [])
+            breakdown[analyzer.name] = analyzer_result
+            patterns.extend(analyzer_result.get("patterns") or [])
 
         score = self._confidence_score(patterns)
         is_generated = score >= self.config.detection_threshold
@@ -466,11 +514,7 @@ class DetectionEngine:
             "statistical": StatisticalAnalyzer(self.config),
             "linguistic": LinguisticAnalyzer(self.config),
         }
-        return [
-            analyzers[name]
-            for name in self.config.enabled_analyzers
-            if name in analyzers
-        ]
+        return [analyzers[name] for name in self.config.enabled_analyzers if name in analyzers]
 
     def _confidence_score(self, patterns: list[DetectedPattern]) -> float:
         if not patterns:
@@ -578,9 +622,7 @@ def _comment_density(content: str) -> float:
     if not lines:
         return 0.0
     comments = [
-        line
-        for line in lines
-        if line.startswith(("#", "//", "/*", "*")) or line.endswith("*/")
+        line for line in lines if line.startswith(("#", "//", "/*", "*")) or line.endswith("*/")
     ]
     return len(comments) / len(lines)
 

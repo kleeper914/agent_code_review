@@ -25,36 +25,31 @@ class ProviderAdapter(Protocol):
     model_name: str
 
     @property
-    def model(self) -> str:
-        ...
+    def model(self) -> str: ...
 
     def generate_review(
         self,
         prompt: str,
         options: GenerationOptions | None = None,
-    ) -> LLMResponse:
-        ...
+    ) -> LLMResponse: ...
 
     def stream_review(
         self,
         prompt: str,
         options: GenerationOptions | None = None,
-    ) -> Iterator[str]:
-        ...
+    ) -> Iterator[str]: ...
 
     async def agenerate_review(
         self,
         prompt: str,
         options: GenerationOptions | None = None,
-    ) -> LLMResponse:
-        ...
+    ) -> LLMResponse: ...
 
     def astream_review(
         self,
         prompt: str,
         options: GenerationOptions | None = None,
-    ) -> AsyncIterator[str]:
-        ...
+    ) -> AsyncIterator[str]: ...
 
 
 class BaseLangChainAdapter:
@@ -113,7 +108,6 @@ class BaseLangChainAdapter:
                 retry_policy=self._retry_policy,
                 rate_limiter=self._rate_limiter,
             )
-            resilience_metadata = {"attempts": attempts}
         except BaseException as exc:
             classified = classify_error(exc, self.provider)
             if self._provider_features.supports_streaming and classified.retryable:
@@ -139,7 +133,7 @@ class BaseLangChainAdapter:
             usage=usage,
             raw=raw_chunks,
             model=self.model,
-            metadata=self._response_metadata(usage, **resilience_metadata),
+            metadata=self._response_metadata(usage, attempts=attempts),
         )
 
     def stream_review(
@@ -226,7 +220,11 @@ class BaseLangChainAdapter:
         messages: list[Any] = [HumanMessage(content=prompt), initial]
         for index, call in enumerate(tool_calls):
             try:
-                result = options.tool_executor(call) if options.tool_executor else "No tool executor configured."
+                result = (
+                    options.tool_executor(call)
+                    if options.tool_executor
+                    else "No tool executor configured."
+                )
             except Exception as exc:
                 result = f"Tool execution failed: {exc}"
             tool_call_id = _tool_call_id(call, index)
@@ -263,7 +261,9 @@ class BaseLangChainAdapter:
             raise
         return raw_chunks, parts, usage
 
-    def _stream_raw_chunks(self, prompt: str, *, allow_stream: bool = True) -> Iterator[tuple[Any, str]]:
+    def _stream_raw_chunks(
+        self, prompt: str, *, allow_stream: bool = True
+    ) -> Iterator[tuple[Any, str]]:
         stream = getattr(self._chat_model, "stream", None)
         if allow_stream and callable(stream):
             for raw in stream(prompt):
@@ -364,8 +364,7 @@ def _to_int(value: Any) -> int | None:
 
 def _has_usage(usage: TokenUsage) -> bool:
     return any(
-        value is not None
-        for value in (usage.input_tokens, usage.output_tokens, usage.total_tokens)
+        value is not None for value in (usage.input_tokens, usage.output_tokens, usage.total_tokens)
     )
 
 

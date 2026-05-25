@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from .runtime.events import redact_metadata
 
@@ -16,7 +16,9 @@ class _RecordedSpan:
 
 
 class SpanHandle(AbstractContextManager["SpanHandle"]):
-    def __init__(self, observability: "Observability", name: str, attributes: dict[str, Any]) -> None:
+    def __init__(
+        self, observability: "Observability", name: str, attributes: dict[str, Any]
+    ) -> None:
         self._observability = observability
         self._record = _RecordedSpan(name=name, attributes=redact_metadata(attributes))
         self._otel_context: Any = None
@@ -31,7 +33,7 @@ class SpanHandle(AbstractContextManager["SpanHandle"]):
                 self._set_otel_attribute(key, value)
         return self
 
-    def __exit__(self, exc_type, exc, traceback) -> bool:
+    def __exit__(self, exc_type, exc, traceback) -> Literal[False]:
         if exc is not None:
             self.set_attribute("error", str(exc))
         if self._observability.enabled:
@@ -60,7 +62,7 @@ class Observability:
         *,
         enabled: bool = False,
         endpoint: str | None = None,
-        service_name: str = "agent-code-review",
+        service_name: str = "aicode-review-python",
         console: bool = False,
     ) -> None:
         self.enabled = enabled
@@ -76,10 +78,7 @@ class Observability:
         return SpanHandle(self, name, attributes or {})
 
     def exported_spans(self) -> list[dict[str, Any]]:
-        return [
-            {"name": span.name, "attributes": dict(span.attributes)}
-            for span in self._spans
-        ]
+        return [{"name": span.name, "attributes": dict(span.attributes)} for span in self._spans]
 
     def _record_span(self, span: _RecordedSpan) -> None:
         self._spans.append(span)
@@ -122,7 +121,7 @@ def configure_observability(
     *,
     enabled: bool,
     endpoint: str | None = None,
-    service_name: str = "agent-code-review",
+    service_name: str = "aicode-review-python",
     console: bool = False,
 ) -> Observability:
     global _OBSERVABILITY

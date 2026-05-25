@@ -1,3 +1,5 @@
+"""Context enhancement helpers shared by phase 3 strategies."""
+
 from __future__ import annotations
 
 import json
@@ -24,14 +26,16 @@ DEPENDENCY_FILES = (
     "Gemfile",
     "go.mod",
     "Cargo.toml",
-    "pubspec.yaml"
+    "pubspec.yaml",
 )
 
 
-def dependency_sections(context: ProjectContext, include_details: bool | None) -> list[ContextSection]:
+def dependency_sections(
+    context: ProjectContext, include_details: bool | None
+) -> list[ContextSection]:
     if include_details is False:
         return []
-    
+
     sections: list[ContextSection] = []
     found: list[str] = []
     for name in DEPENDENCY_FILES:
@@ -50,7 +54,7 @@ def dependency_sections(context: ProjectContext, include_details: bool | None) -
                 metadata={"path": name},
             )
         )
-    
+
     if not sections:
         sections.append(
             ContextSection(
@@ -85,21 +89,21 @@ def command_context(
 ) -> tuple[ContextSection, dict[str, Any]]:
     executable = shutil.which(command[0])
     if executable is None:
-        metadata = {
+        metadata: dict[str, Any] = {
             "command": command,
             "status": "skipped",
-            "reason": f"{command[0]} is not available on PATH.",
+            "reason": f"{command[0]} is not available on PATH",
         }
         return (
             ContextSection(
                 title=title,
                 content=f"Skipped: {metadata['reason']}.",
                 source="local-tool",
-                metadata=metadata
+                metadata=metadata,
             ),
-            metadata
+            metadata,
         )
-    
+
     try:
         completed = subprocess.run(
             [executable, *command[1:]],
@@ -109,12 +113,8 @@ def command_context(
             timeout=timeout_seconds,
             check=False,
         )
-    except Exception as exc:    # pragma: no cover - defensive around local tools
-        metadata = {
-            "command": command,
-            "status": "error",
-            "reason": str(exc)
-        }
+    except Exception as exc:  # pragma: no cover - defensive around local tools
+        metadata = {"command": command, "status": "error", "reason": str(exc)}
         return (
             ContextSection(
                 title=title,
@@ -124,7 +124,7 @@ def command_context(
             ),
             metadata,
         )
-    
+
     output = "\n".join(part for part in (completed.stdout, completed.stderr) if part).strip()
     if len(output) > 12_000:
         output = f"{output[:12_000]}\n\n[Tool output truncated]"
@@ -168,7 +168,7 @@ def unused_code_tooling_sections(
         )
         sections.append(section)
         tooling["eslint"] = metadata
-    
+
     if not sections:
         sections.append(
             ContextSection(
@@ -202,5 +202,5 @@ def json_section(title: str, payload: dict[str, Any], source: str) -> ContextSec
         title=title,
         content=json.dumps(payload, ensure_ascii=False, indent=2),
         source=source,
-        metadata={"format": "json"}
+        metadata={"format": "json"},
     )
